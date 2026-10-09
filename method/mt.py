@@ -119,71 +119,6 @@ def adapt_epoch(model_t, model_s, optim, train_loader, args):
     return total_loss / num_batches if num_batches > 0 else 0.0
 
 
-def collect(model, data_loader):
-    model.eval()
-    pred_results_list = []
-    gt_segs_list = []
-    with torch.no_grad():
-        for sample in data_loader:
-            data = sample['image']
-            target_map = sample['label']
-            assert len(sample['img_name']) == 1, "loader must use batch_size=1"
-            if len(data.shape) == 5:
-                B, C, D, H, W = data.shape
-                data = data.permute(0, 2, 1, 3, 4).contiguous().view(B * D, C, H, W)
-            predictions = model(data.cuda())['out']
-            if target_map.dim() == 5:
-                target_map = target_map[:, 0]
-            target_map = target_map.reshape(-1, predictions.shape[-2], predictions.shape[-1]).long()
-            preds, targets = [], []
-            for i in range(predictions.shape[0]):
-                if target_map[i].sum() == 0:
-                    continue
-                preds.append(predictions[i].detach().cpu())
-                targets.append(target_map[i].detach().cpu().unsqueeze(0))
-            if len(preds) == 0:
-                continue
-            pred_results_list.append(torch.stack(preds, dim=0))
-            gt_segs_list.append(torch.stack(targets, dim=0))
-    return pred_results_list, gt_segs_list
-
-
-def evaluate(model, data_loader):
-    pred_results_list, gt_segs_list = collect(model, data_loader)
-
-    val_dice = {name: [] for name in NAMES[1:]}
-    val_assd = {name: [] for name in NAMES[1:]}
-    val_hd95 = {name: [] for name in NAMES[1:]}
-
-    for pred, gt in zip(pred_results_list, gt_segs_list):
-        dice = dice_onehot(pred, gt, NUM_CLASSES, names=NAMES)
-        assd = assd_onehot(pred, gt, NUM_CLASSES, names=NAMES)
-        hd95 = hd95_onehot(pred, gt, NUM_CLASSES, names=NAMES)
-
-        for name in val_dice:
-            val_dice[name].extend(np.asarray(dice[name], dtype=np.float64).tolist())
-            val_assd[name].extend(np.asarray(assd[name], dtype=np.float64).tolist())
-            val_hd95[name].extend(np.asarray(hd95[name], dtype=np.float64).tolist())
-
-    dice_means = np.array([np.nanmean(val_dice[name]) for name in val_dice], dtype=np.float64)
-    dice_stds = np.array([np.nanstd(val_dice[name]) for name in val_dice], dtype=np.float64)
-    assd_means = np.array([np.nanmean(val_assd[name]) for name in val_assd], dtype=np.float64)
-    assd_stds = np.array([np.nanstd(val_assd[name]) for name in val_assd], dtype=np.float64)
-    hd95_means = np.array([np.nanmean(val_hd95[name]) for name in val_hd95], dtype=np.float64)
-    hd95_stds = np.array([np.nanstd(val_hd95[name]) for name in val_hd95], dtype=np.float64)
-
-    mean_dice = float(np.nanmean(dice_means))
-    mean_dice_std = float(np.nanstd(dice_means))
-    mean_assd = float(np.nanmean(assd_means))
-    mean_assd_std = float(np.nanstd(assd_means))
-    mean_hd95 = float(np.nanmean(hd95_means))
-    mean_hd95_std = float(np.nanstd(hd95_means))
-
-    model.train()
-    return (dice_means, dice_stds, assd_means, assd_stds, hd95_means, hd95_stds,
-            mean_dice, mean_dice_std, mean_assd, mean_assd_std, mean_hd95, mean_hd95_std)
-
-
 def main():
     now = datetime.now()
     here = osp.dirname(osp.abspath(__file__))
@@ -288,23 +223,6 @@ def main():
             args.out_file.write(res_str_s + '\n')
             args.out_file.flush()
 
-
-def format_result(name, epoch, dice_means, dice_stds, assd_means, assd_stds,
-                  hd95_means, hd95_stds, mean_dice, mean_dice_std,
-                  mean_assd, mean_assd_std, mean_hd95, mean_hd95_std):
-    res_str = '{} {} Dice - LV: {:.2f}\u00b1{:.2f} MYO: {:.2f}\u00b1{:.2f} RV: {:.2f}\u00b1{:.2f}, Mean (LV,MYO,RV): {:.2f}\u00b1{:.2f}'.format(
-        name, epoch,
-        dice_means[0] * 100, dice_stds[0] * 100, dice_means[1] * 100, dice_stds[1] * 100,
-        dice_means[2] * 100, dice_stds[2] * 100, mean_dice * 100, mean_dice_std * 100)
-    res_str += '\n{} {} ASSD - LV: {:.4f}\u00b1{:.4f} MYO: {:.4f}\u00b1{:.4f} RV: {:.4f}\u00b1{:.4f}, Mean (LV,MYO,RV): {:.4f}\u00b1{:.4f}'.format(
-        name, epoch,
-        assd_means[0], assd_stds[0], assd_means[1], assd_stds[1], assd_means[2], assd_stds[2],
-        mean_assd, mean_assd_std)
-    res_str += '\n{} {} HD95 - LV: {:.4f}\u00b1{:.4f} MYO: {:.4f}\u00b1{:.4f} RV: {:.4f}\u00b1{:.4f}, Mean (LV,MYO,RV): {:.4f}\u00b1{:.4f}'.format(
-        name, epoch,
-        hd95_means[0], hd95_stds[0], hd95_means[1], hd95_stds[1], hd95_means[2], hd95_stds[2],
-        mean_hd95, mean_hd95_std)
-    return res_str
 
 if __name__ == '__main__':
     main()
