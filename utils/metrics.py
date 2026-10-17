@@ -3,7 +3,6 @@ import numpy as np
 import surface_distance as surfdist
 import torch.nn.functional as F
 
-
 def format_result(name, epoch, dice_means, dice_stds, assd_means, assd_stds,
                   hd95_means, hd95_stds, mean_dice, mean_dice_std,
                   mean_assd, mean_assd_std, mean_hd95, mean_hd95_std):
@@ -33,8 +32,8 @@ def evaluate(model, val_loader,num_classes,names):
 
     with torch.no_grad():
         for batch_idx, sample in enumerate(val_loader):
-            image = sample[0].cuda()
-            label = sample[1].cuda()
+            image = sample['image'].cuda()
+            label = sample['label'].cuda()
 
             logit,feat = model(image)
             prob = F.softmax(logit,dim=1)               # [B,5,H,W] ---> [B,5,H,W]
