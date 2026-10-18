@@ -1,6 +1,7 @@
 import argparse
 from torch import Tensor
 from utils.metrics import *
+from utils.metrics import evaluate as _metrics_evaluate
 from utils.tools import *
 
 parser = argparse.ArgumentParser()
@@ -13,9 +14,9 @@ parser.add_argument('--out-stride', type=int, default=16)
 parser.add_argument('--sync-bn', type=bool, default=True)
 parser.add_argument('--freeze-bn', type=bool, default=False)
 parser.add_argument('--epoch', type=int, default=20)
-parser.add_argument('--lr', type=float, default=5e-4)
-parser.add_argument('--lr-decrease-rate', type=float, default=0.95, help='ratio multiplied to initial lr')
-parser.add_argument('--lr-decrease-epoch', type=int, default=1, help='interval epoch number for lr decrease')
+parser.add_argument('--lr', type=float, default=1e-5)
+parser.add_argument('--lr-decrease-rate', type=float, default=0.9, help='ratio multiplied to initial lr')
+parser.add_argument('--lr-decrease-epoch', type=int, default=4, help='interval epoch number for lr decrease')
 
 parser.add_argument('--data-dir', default='/data0/grchen/Data/M&MS')
 parser.add_argument('--dataset', type=str, default='mms')
@@ -25,10 +26,15 @@ parser.add_argument('--split', type=str, default='train', choices=['train', 'val
 parser.add_argument('--batch-size', type=int, default=2)
 
 parser.add_argument('--model-ema-rate', type=float, default=0.98)
-parser.add_argument('--pseudo-label-threshold', type=float, default=0.75)
+parser.add_argument('--pseudo-label-threshold', type=float, default=0.95)
 parser.add_argument('--mean-loss-calc-bound-ratio', type=float, default=0.2)
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid',type=int,default=1)
+
+parser.add_argument('--fold-json', type=str, default=None,
+                    help='K-fold 划分文件路径，如 kfold_splits/mms/kfold_B.json')
+parser.add_argument('--fold-id', type=int, default=None,
+                    help='当前折号（0 ~ K-1）')
 args = parser.parse_args()
 
 import os
@@ -36,6 +42,7 @@ import os
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
 import os.path as osp
+import json
 
 import numpy as np
 import torch.nn.functional as F
@@ -68,8 +75,44 @@ NUM_CLASSES = 4
 NAMES = ['BG','LV','MYO','RV']
 
 
+def dice_loss(predict, target):
+    target = target.float()
+    smooth = 1e-4
+    intersect = torch.sum(predict * target)
+    dice = (2 * intersect + smooth) / (torch.sum(target) + torch.sum(predict * predict) + smooth)
+    return 1.0 - dice
+
+
+class DiceLoss(nn.Module):
+    def __init__(self, n_classes):
+        super().__init__()
+        self.n_classes = n_classes
+
+    def one_hot_encode(self, input_tensor):
+        tensor_list = []
+        for i in range(self.n_classes):
+            tmp = (input_tensor == i) * torch.ones_like(input_tensor)
+            tensor_list.append(tmp)
+        return torch.cat(tensor_list, dim=1).float()
+
+    def forward(self, inputs, target, one_hot):
+        x_shape = list(target.shape)
+        if len(x_shape) == 5:
+            N, C, D, H, W = x_shape
+            new_shape = [N * D, C, H, W]
+            target = torch.transpose(target, 1, 2)
+            target = torch.reshape(target, new_shape)
+        if one_hot:
+            target = self.one_hot_encode(target)
+        assert inputs.shape == target.shape, 'size must match'
+        loss = 0.0
+        for i in range(self.n_classes):
+            loss += dice_loss(inputs[:, i, :, :], target[:, i, :, :])
+        return loss / self.n_classes
+
+
 class UPLDeepLabV3Plus(nn.Module):
-    def __init__(self, source_model, num_decoders=4):
+    def __init__(self, source_model, num_decoders=4, pl_threshold=0.95):
         super().__init__()
         '''
             model has been loaded state dict
@@ -82,7 +125,8 @@ class UPLDeepLabV3Plus(nn.Module):
         self.aux_dec3 = copy.deepcopy(source_model.decoder)
         self.aux_dec4 = copy.deepcopy(source_model.decoder)
 
-        self.pl_threshold = 0.95
+        self.pl_threshold = pl_threshold
+        self.segloss = DiceLoss(NUM_CLASSES)
         
     def forward(self, x):
         A_1 = rotate_single_with_label(x, 1)
@@ -90,20 +134,25 @@ class UPLDeepLabV3Plus(nn.Module):
         A_3 = rotate_single_with_label(x, 3)
         A_4 = x
 
-        low_1, high_1 = self.backbone(A_1, return_features=True)
-        low_2, high_2 = self.backbone(A_2, return_features=True)
-        low_3, high_3 = self.backbone(A_3, return_features=True)
-        low_4, high_4 = self.backbone(A_4, return_features=True)
+        high_1, low_1 = self.backbone(A_1)
+        high_2, low_2 = self.backbone(A_2)
+        high_3, low_3 = self.backbone(A_3)
+        high_4, low_4 = self.backbone(A_4)
 
         aspp_1 = self.aspp(high_1)
         aspp_2 = self.aspp(high_2)
         aspp_3 = self.aspp(high_3)
         aspp_4 = self.aspp(high_4)
 
-        self.aux_seg_1 = self.aux_dec1(low_1, aspp_1).softmax(1)
-        self.aux_seg_2 = self.aux_dec2(low_2, aspp_2).softmax(1)
-        self.aux_seg_3 = self.aux_dec3(low_3, aspp_3).softmax(1)
-        self.aux_seg_4 = self.aux_dec4(low_4, aspp_4).softmax(1)
+        out_1, _ = self.aux_dec1(aspp_1, low_1)
+        out_2, _ = self.aux_dec2(aspp_2, low_2)
+        out_3, _ = self.aux_dec3(aspp_3, low_3)
+        out_4, _ = self.aux_dec4(aspp_4, low_4)
+
+        self.aux_seg_1 = F.interpolate(out_1, size=x.size()[2:], mode='bilinear', align_corners=True).softmax(1)
+        self.aux_seg_2 = F.interpolate(out_2, size=x.size()[2:], mode='bilinear', align_corners=True).softmax(1)
+        self.aux_seg_3 = F.interpolate(out_3, size=x.size()[2:], mode='bilinear', align_corners=True).softmax(1)
+        self.aux_seg_4 = F.interpolate(out_4, size=x.size()[2:], mode='bilinear', align_corners=True).softmax(1)
 
         self.aux_seg_1 = rotate_single_with_label(self.aux_seg_1, 3)
         self.aux_seg_2 = rotate_single_with_label(self.aux_seg_2, 2)
@@ -120,9 +169,10 @@ class UPLDeepLabV3Plus(nn.Module):
         self.four_predict_map = (pred_aux3+pred_aux4+pred_aux2+pred_aux1)/4.0
         self.four_predict_map[self.four_predict_map > self.pl_threshold] = 1
         self.four_predict_map[self.four_predict_map < 1] = 0
-        B,D,W,H = self.four_predict_map.shape
-        for i in range(D):
-            self.four_predict_map[:,i,:,:] = get_largest_component(self.four_predict_map[:,i,:,:])
+        B, C, W, H = self.four_predict_map.shape
+        for i in range(B):
+            for c in range(C):
+                self.four_predict_map[i, c] = get_largest_component(self.four_predict_map[i, c])
 
     def train_target(self,x):
         self.save_nii(x)
@@ -143,10 +193,50 @@ class UPLDeepLabV3Plus(nn.Module):
 
         return diceloss, mean_map_entropyloss
 
-def adapt_epoch(upl_model, optim, train_loader, args):
+
+class EvalWrapper(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, image):
+        prob = self.model(image)
+        return torch.log(prob + 1e-6), None
+
+
+class SliceLoaderWrapper:
+    """Flatten (B, 3, D, H, W) volumes to (B*D, 3, H, W) slices for evaluation.
+
+    4D samples are passed through unchanged.
+    """
+    def __init__(self, loader):
+        self.loader = loader
+
+    def __iter__(self):
+        for sample in self.loader:
+            image = sample['image']
+            label = sample['label']
+            if image.dim() == 5:
+                B, C, D, H, W = image.shape
+                image = image.permute(0, 2, 1, 3, 4).contiguous().view(B * D, C, H, W)
+                label = label.permute(0, 2, 1, 3, 4).contiguous().view(B * D, 1, H, W)
+            sample = dict(sample)
+            sample['image'] = image
+            sample['label'] = label
+            yield sample
+
+    def __len__(self):
+        return len(self.loader)
+
+
+def evaluate(model, val_loader):
+    return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES)
+
+
+def adapt_epoch(upl_model, optims, train_loader, args):
     total_loss = 0.0
     num_batches = 0
-    for sample in train_loader:
+    for _, sample in train_loader:
         imgs = sample['image']
         if torch.cuda.is_available():
             imgs = imgs.cuda()
@@ -154,24 +244,53 @@ def adapt_epoch(upl_model, optim, train_loader, args):
         # mms volume (B, 3, D, H, W) -> slices (B*D, 3, H, W)
         B, C, D, H, W = imgs.size()
         imgs = imgs.permute(0, 2, 1, 3, 4).contiguous().view(B * D, C, H, W)
-        # model predict
-        diceloss,mean_map_entropyloss = upl_model.train_target(imgs)
-        # only basic pseudo-label loss
+
+        for opt in optims:
+            opt.zero_grad()
+        # model predict + pseudo-label losses
+        diceloss, mean_map_entropyloss = upl_model.train_target(imgs)
         loss = diceloss + mean_map_entropyloss
-        optim.zero_grad()
         loss.backward()
-        optim.step()
-        
+        for opt in optims:
+            opt.step()
+
         total_loss += loss.item()
         num_batches += 1
-
 
     return total_loss / num_batches if num_batches > 0 else 0.0
 
 
 def main():
-    here = osp.dirname(osp.abspath(__file__))
-    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note)
+    # ---------- 读取 K-fold 划分 ----------
+    if args.fold_json is not None and args.fold_id is not None:
+        with open(args.fold_json, 'r') as f:
+            folds = json.load(f)
+        fold = folds[args.fold_id]
+        train_patients = fold['train']
+        val_patients   = fold['val']
+        test_patients  = fold['test']
+
+        print(f'=== Fold {args.fold_id} ===')
+        print(f'train patients ({len(train_patients)}): {train_patients}')
+        print(f'val patients   ({len(val_patients)}): {val_patients}')
+        print(f'test patients  ({len(test_patients)}): {test_patients}')
+
+        # 安全检查
+        assert len(set(train_patients) & set(val_patients)) == 0
+        assert len(set(train_patients) & set(test_patients)) == 0
+        assert len(set(val_patients)   & set(test_patients)) == 0
+        print('no patient overlap')
+
+        # 给 output 目录加 fold 后缀，避免覆盖
+        fold_suffix = f'_fold{args.fold_id}'
+    else:
+        train_patients = None
+        val_patients   = None
+        test_patients  = None
+        fold_suffix = ''
+
+    here = '/data0/grchen/SFDA_MIS_TestSys'
+    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note + fold_suffix)
     if not osp.exists(args.out):
         os.makedirs(args.out)
     args.out_file = open(osp.join(args.out, 'result.txt'), 'w')
@@ -184,11 +303,14 @@ def main():
     lab_dir = osp.join(args.data_dir, 'train', 'lab', args.target)
 
     dataset_train = mms_dataloader.niiDataset_2transform_split(source_img=img_dir, source_lab=lab_dir,
-                                                         dataset=args.dataset, phase='train', mode='target')
+                                                         dataset=args.dataset, phase='train', mode='target',
+                                                         patient_list=train_patients)
     dataset_val = mms_dataloader.niiDataset_2transform_split(source_img=img_dir, source_lab=lab_dir,
-                                                         dataset=args.dataset, phase='val', mode='target')
+                                                         dataset=args.dataset, phase='val', mode='target',
+                                                         patient_list=val_patients)
     dataset_test = mms_dataloader.niiDataset_2transform_split(source_img=img_dir, source_lab=lab_dir,
-                                                             dataset=args.dataset, phase='test', mode='target')
+                                                             dataset=args.dataset, phase='test', mode='target',
+                                                             patient_list=test_patients)
     
     train_loader = DataLoader(dataset_train, batch_size=args.batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=2)
@@ -212,7 +334,7 @@ def main():
 
     model.load_state_dict(filtered_state_dict, strict=False)
 
-    upl_model = UPLDeepLabV3Plus(model)
+    upl_model = UPLDeepLabV3Plus(model, pl_threshold=args.pseudo_label_threshold)
 
     if torch.cuda.is_available():
             upl_model = upl_model.cuda()
@@ -220,19 +342,26 @@ def main():
     if (args.gpu).find(',') != -1:
         upl_model = torch.nn.DataParallel(upl_model, device_ids=[0, 1])
 
-
-    optim = torch.optim.Adam(upl_model.parameters(), lr=args.lr, betas=(0.9, 0.999))
-    scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=args.lr_decrease_epoch, gamma=args.lr_decrease_rate)
+    # UPL-SFDA original: encoder and each auxiliary decoder have their own optimizer
+    enc_params = list(upl_model.backbone.parameters()) + list(upl_model.aspp.parameters())
+    enc_opt = torch.optim.Adam(enc_params, lr=args.lr, betas=(0.9, 0.999))
+    dec_opts = [
+        torch.optim.Adam(upl_model.aux_dec1.parameters(), lr=args.lr, betas=(0.5, 0.999)),
+        torch.optim.Adam(upl_model.aux_dec2.parameters(), lr=args.lr, betas=(0.5, 0.999)),
+        torch.optim.Adam(upl_model.aux_dec3.parameters(), lr=args.lr, betas=(0.5, 0.999)),
+        torch.optim.Adam(upl_model.aux_dec4.parameters(), lr=args.lr, betas=(0.5, 0.999)),
+    ]
+    optims = [enc_opt] + dec_opts
+    schedulers = [torch.optim.lr_scheduler.StepLR(opt, step_size=args.lr_decrease_epoch,
+                                                  gamma=args.lr_decrease_rate) for opt in optims]
 
     upl_model.train()
 
-    args.out_file.write(log_str + '\n')
-    args.out_file.flush()
-
     for epoch in range(args.epoch):
-        epoch_loss = adapt_epoch(upl_model, optim, train_loader, args)
-      
-        scheduler.step()
+        epoch_loss = adapt_epoch(upl_model, optims, train_loader, args)
+
+        for sch in schedulers:
+            sch.step()
 
         log_str = 'epoch {}/{}: loss {:.6f}'.format(epoch + 1, args.epoch, epoch_loss)
         print(log_str)

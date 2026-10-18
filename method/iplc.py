@@ -32,6 +32,11 @@ parser.add_argument('--sample-times', type=int, default=10, help='SAM sampling t
 parser.add_argument('--curve-loss-weight', type=float, default=0.01)
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid',type=int,default=1)
+
+parser.add_argument('--fold-json', type=str, default=None,
+                    help='K-fold 划分文件路径，如 kfold_splits/mms/kfold_B.json')
+parser.add_argument('--fold-id', type=int, default=None,
+                    help='当前折号（0 ~ K-1）')
 args = parser.parse_args()
 
 import os
@@ -39,6 +44,7 @@ import os
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
 import os.path as osp
+import json
 
 import numpy as np
 import cv2
@@ -346,9 +352,36 @@ def adapt_epoch(model, optim, train_loader, args):
 
 
 def main():
-    now = datetime.now()
-    here = osp.dirname(osp.abspath(__file__))
-    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note)
+    # ---------- 读取 K-fold 划分 ----------
+    if args.fold_json is not None and args.fold_id is not None:
+        with open(args.fold_json, 'r') as f:
+            folds = json.load(f)
+        fold = folds[args.fold_id]
+        train_patients = fold['train']
+        val_patients   = fold['val']
+        test_patients  = fold['test']
+
+        print(f'=== Fold {args.fold_id} ===')
+        print(f'train patients ({len(train_patients)}): {train_patients}')
+        print(f'val patients   ({len(val_patients)}): {val_patients}')
+        print(f'test patients  ({len(test_patients)}): {test_patients}')
+
+        # 安全检查
+        assert len(set(train_patients) & set(val_patients)) == 0
+        assert len(set(train_patients) & set(test_patients)) == 0
+        assert len(set(val_patients)   & set(test_patients)) == 0
+        print('no patient overlap')
+
+        # 给 output 目录加 fold 后缀，避免覆盖
+        fold_suffix = f'_fold{args.fold_id}'
+    else:
+        train_patients = None
+        val_patients   = None
+        test_patients  = None
+        fold_suffix = ''
+
+    here = '/data0/grchen/SFDA_MIS_TestSys'
+    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note + fold_suffix)
     if not osp.exists(args.out):
         os.makedirs(args.out)
     args.out_file = open(osp.join(args.out, 'result.txt'), 'w')
@@ -362,11 +395,14 @@ def main():
     lab_dir = osp.join(args.data_dir, 'train', 'lab', args.target)
 
     dataset_train = mms_dataloader.niiDataset_2transform_split(source_img=img_dir, source_lab=lab_dir,
-                                                         dataset=args.dataset, phase='train', mode='target')
+                                                         dataset=args.dataset, phase='train', mode='target',
+                                                         patient_list=train_patients)
     dataset_val = mms_dataloader.niiDataset_2transform_split(source_img=img_dir, source_lab=lab_dir,
-                                                         dataset=args.dataset, phase='val', mode='target')
+                                                         dataset=args.dataset, phase='val', mode='target',
+                                                         patient_list=val_patients)
     dataset_test = mms_dataloader.niiDataset_2transform_split(source_img=img_dir, source_lab=lab_dir,
-                                                             dataset=args.dataset, phase='test', mode='target')
+                                                             dataset=args.dataset, phase='test', mode='target',
+                                                             patient_list=test_patients)
     
     train_loader = DataLoader(dataset_train, batch_size=args.batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=2)

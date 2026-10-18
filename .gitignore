@@ -3,3 +3,4 @@ __pycache__/
 *$py.class
 external/
 pre_trained_LLM/
+logs_target/
