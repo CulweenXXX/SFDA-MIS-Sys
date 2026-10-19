@@ -21,7 +21,51 @@ def format_result(name, epoch, dice_means, dice_stds, assd_means, assd_stds,
     return res_str
 
 
+def _dice_volume(mask_pred, mask_gt):
+    """体数据 3D Dice；两者皆空时返回 NaN（对齐 CCRC cal_dice_score 语义）。"""
+    mask_pred = np.asarray(mask_pred, dtype=bool)
+    mask_gt = np.asarray(mask_gt, dtype=bool)
+    denom = mask_pred.sum() + mask_gt.sum()
+    if denom == 0:
+        return np.nan
+    inter = np.logical_and(mask_pred, mask_gt).sum()
+    return 2.0 * inter / denom
+
+
+def _assd_volume(mask_pred, mask_gt):
+    """体数据 3D ASSD（spacing=(1,1,1)）；任一方为空时返回 NaN。"""
+    mask_pred = np.asarray(mask_pred, dtype=bool)
+    mask_gt = np.asarray(mask_gt, dtype=bool)
+    if mask_pred.sum() == 0 or mask_gt.sum() == 0:
+        return np.nan
+    sd = surfdist.compute_surface_distances(mask_gt, mask_pred, spacing_mm=(1.0, 1.0, 1.0))
+    val = surfdist.compute_average_surface_distance(sd)
+    if isinstance(val, (tuple, list)):
+        val = 0.5 * (float(val[0]) + float(val[1]))
+    return float(val)
+
+
+def _hd95_volume(mask_pred, mask_gt):
+    """体数据 3D HD95（spacing=(1,1,1)）；任一方为空时返回 NaN。"""
+    mask_pred = np.asarray(mask_pred, dtype=bool)
+    mask_gt = np.asarray(mask_gt, dtype=bool)
+    if mask_pred.sum() == 0 or mask_gt.sum() == 0:
+        return np.nan
+    sd = surfdist.compute_surface_distances(mask_gt, mask_pred, spacing_mm=(1.0, 1.0, 1.0))
+    val = surfdist.compute_robust_hausdorff(sd, 95)
+    if isinstance(val, (tuple, list)):
+        val = 0.5 * (float(val[0]) + float(val[1]))
+    return float(val)
+
+
 def evaluate(model, val_loader,num_classes,names):
+    """按 patient-volume 口径评测（对齐 CCRC `collect` + utils/metric2.py）。
+
+    要求评测 loader 的 batch_size=1（每个 batch 是一个 volume 的全部切片，
+    即各方法脚本里 SliceLoaderWrapper 的输出），或直接传 5D (B,3,D,H,W)。
+    流程：切片拼回体数据 -> 丢弃 GT 全空切片 -> 逐 volume 计算体 Dice/ASSD/HD95
+    -> 对 volume 取 nanmean/nanstd。
+    """
     model.eval()
     NUM_CLASSES = num_classes
     NAMES = names
@@ -31,22 +75,42 @@ def evaluate(model, val_loader,num_classes,names):
     val_hd95 = {name: [] for name in NAMES[1:]}
 
     with torch.no_grad():
-        for batch_idx, sample in enumerate(val_loader):
+        for sample in val_loader:
             image = sample['image'].cuda()
             label = sample['label'].cuda()
 
-            logit,feat = model(image)
-            prob = F.softmax(logit,dim=1)               # [B,5,H,W] ---> [B,5,H,W]
+            if image.dim() == 5:
+                B, C, D, H, W = image.shape
+                image = image.permute(0, 2, 1, 3, 4).contiguous().view(B * D, C, H, W)
+                label = label.permute(0, 2, 1, 3, 4).contiguous().view(B * D, 1, H, W)
+            else:
+                B = 1
+                D = image.shape[0]
 
+            logit, feat = model(image)
+            pred = logit.argmax(dim=1).cpu()
+            gt = label.long().cpu()
+            if gt.dim() == 4:
+                gt = gt.squeeze(1)
 
-            dice = dice_onehot(prob, label, NUM_CLASSES, names=NAMES)
-            assd = assd_onehot(prob, label, NUM_CLASSES, names=NAMES)
-            hd95 = hd95_onehot(prob, label, NUM_CLASSES, names=NAMES)
+            for b in range(B):
+                vp = pred[b * D:(b + 1) * D]
+                vg = gt[b * D:(b + 1) * D]
 
-            for name in val_dice:
-                val_dice[name].extend(np.asarray(dice[name], dtype=np.float64).tolist())
-                val_assd[name].extend(np.asarray(assd[name], dtype=np.float64).tolist())
-                val_hd95[name].extend(np.asarray(hd95[name], dtype=np.float64).tolist())
+                keep = (vg != 0).reshape(D, -1).sum(dim=1) > 0
+                if int(keep.sum()) == 0:
+                    continue
+
+                vp = vp[keep].numpy()
+                vg = vg[keep].numpy()
+
+                for c in range(1, NUM_CLASSES):
+                    name = NAMES[c]
+                    p_mask = vp == c
+                    g_mask = vg == c
+                    val_dice[name].append(_dice_volume(p_mask, g_mask))
+                    val_assd[name].append(_assd_volume(p_mask, g_mask))
+                    val_hd95[name].append(_hd95_volume(p_mask, g_mask))
 
     dice_means = np.array([np.nanmean(val_dice[name]) for name in val_dice], dtype=np.float64)
     dice_stds = np.array([np.nanstd(val_dice[name]) for name in val_dice], dtype=np.float64)

@@ -23,5 +23,5 @@ for fold in $(seq 0 $((K-1))); do
         --model-ema-rate 0.98 \
         --pseudo-label-threshold 0.75 \
         --epoch 20 \
-        --interval-valid 1
+        --interval-valid 5
 done
