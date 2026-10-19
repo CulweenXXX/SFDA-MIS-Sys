@@ -1,6 +1,7 @@
 import argparse
 from torch import Tensor
 from utils.metrics import *
+from utils.metrics import evaluate as _metrics_evaluate
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-g', '--gpu', type=str, default='0')
@@ -45,6 +46,7 @@ import numpy as np
 import torch.nn.functional as F
 
 import torch
+import torch.nn as nn
 torch.backends.cudnn.enabled = False
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
@@ -68,6 +70,46 @@ torch.cuda.manual_seed(seed)
 
 NUM_CLASSES = 4
 NAMES = ['BG','LV','MYO','RV']
+
+
+class EvalWrapper(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, image):
+        output = self.model(image)
+        return output['out'], output['feat']
+
+
+class SliceLoaderWrapper:
+    """Flatten (B, 3, D, H, W) volumes to (B*D, 3, H, W) slices for evaluation.
+
+    4D samples are passed through unchanged.
+    """
+    def __init__(self, loader):
+        self.loader = loader
+
+    def __iter__(self):
+        for sample in self.loader:
+            image = sample['image']
+            label = sample['label']
+            if image.dim() == 5:
+                B, C, D, H, W = image.shape
+                image = image.permute(0, 2, 1, 3, 4).contiguous().view(B * D, C, H, W)
+                label = label.permute(0, 2, 1, 3, 4).contiguous().view(B * D, 1, H, W)
+            sample = dict(sample)
+            sample['image'] = image
+            sample['label'] = label
+            yield sample
+
+    def __len__(self):
+        return len(self.loader)
+
+
+def evaluate(model, val_loader):
+    return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES)
+
 
 def soft_label_to_hard(soft_pls, pseudo_label_threshold):
     pseudo_labels = torch.zeros(soft_pls.size())
@@ -146,17 +188,17 @@ def main():
         assert len(set(val_patients)   & set(test_patients)) == 0
         print('no patient overlap')
 
-        # 给 output 目录加 fold 后缀，避免覆盖
-        fold_suffix = f'_fold{args.fold_id}'
+        # 输出目录：{note}/fold_{fold_id}
+        fold_dir = f'fold_{args.fold_id}'
     else:
         train_patients = None
         val_patients   = None
         test_patients  = None
-        fold_suffix = ''
+        fold_dir = 'full'
 
     now = datetime.now()
     here = '/data0/grchen/SFDA_MIS_TestSys'
-    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note + fold_suffix)
+    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note, fold_dir)
     if not osp.exists(args.out):
         os.makedirs(args.out)
     args.out_file = open(osp.join(args.out, 'result.txt'), 'w')
@@ -223,6 +265,11 @@ def main():
     args.out_file.write(log_str + '\n')
     args.out_file.flush()
 
+    res_str = format_result('Source Only', 0, *evaluate(model_t, test_loader))
+    print(res_str)
+    args.out_file.write(res_str + '\n')
+    args.out_file.flush()
+
     for epoch in range(args.epoch):
         epoch_loss = adapt_epoch(model_t, model_s, optim, train_loader, args)
       
@@ -249,7 +296,9 @@ def main():
             args.out_file.write(res_str_s + '\n')
             args.out_file.flush()
 
-            # ----------------------------------- 
+            args.out_file.write('-'*32 + '\n')
+            args.out_file.flush()
+
             res_str_t = format_result('Teacher Test', epoch + 1, *evaluate(model_t, test_loader))
             print(res_str_t)
             args.out_file.write(res_str_t + '\n')

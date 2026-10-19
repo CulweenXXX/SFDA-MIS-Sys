@@ -1,43 +1,71 @@
-# collect_kfold.py
-import re, os
+import argparse
+import os
+import re
+import sys
+
 import numpy as np
 
-TARGET = 'D'
-NOTE = 'MT98_双学生_CE无mask_MSE一致hard'
-K = 5
-BASE = f'./logs_target/mms/{TARGET}'
+parser = argparse.ArgumentParser()
+parser.add_argument('--target', type=str, default='D', help='target domain (B/C/D)')
+parser.add_argument('--note', type=str, default='IPLC', help='方法名，对应 logs_target 下的方法目录')
+parser.add_argument('-k', '--folds', type=int, default=5, help='折数')
+parser.add_argument('--root', type=str, default='./logs_target/mms', help='日志根目录')
+args = parser.parse_args()
 
-def extract_last_student_test_dice(result_file):
-    """从 result.txt 里抓最后一个 Student Test 的 avg dice"""
+TARGET = args.target
+NOTE = args.note
+K = args.folds
+BASE = os.path.join(args.root, TARGET, NOTE)
+
+
+def extract_last_test_dice(result_file):
+    """抓最后一个 Test（MT 优先 Student Test）的 LV/MYO/RV/Mean 四个 avg Dice"""
     with open(result_file) as f:
         content = f.read()
-    # 匹配 'Student Test N dice: ... avg:XX.XX'
-    matches = re.findall(
-        r'Teacher Test \d+ dice:.*?avg:([\d.]+)', content)
-    return float(matches[-1]) if matches else None
+    body = (
+        r' - LV: ([\d.]+)±[\d.]+'
+        r' MYO: ([\d.]+)±[\d.]+'
+        r' RV: ([\d.]+)±[\d.]+'
+        r'.*?Mean \(LV,MYO,RV\): ([\d.]+)'
+    )
+    for prefix in (r'Student Test \d+ Dice', r'Test \d+ Dice'):
+        matches = re.findall(prefix + body, content)
+        if matches:
+            return tuple(float(v) for v in matches[-1])
+    return None
 
-dices_per_fold = []
-logs = ""
 
+per_fold = []
 for fold in range(K):
-    result_file = os.path.join(BASE, f'{NOTE}_fold{fold}', 'result.txt')
+    result_file = os.path.join(BASE, f'fold_{fold}', 'result.txt')
     if not os.path.exists(result_file):
         print(f'[missing] {result_file}')
         continue
-    d = extract_last_student_test_dice(result_file)
-    if d is not None:
-        dices_per_fold.append(d)
-        logs += f'Fold {fold}: {d:.2f} \n'
-        # print(f'Fold {fold}: {d:.2f}')
+    values = extract_last_test_dice(result_file)
+    if values is None:
+        print(f'[no Test dice] {result_file}')
+        continue
+    per_fold.append((fold, values))
 
-dices = np.array(dices_per_fold)
+if not per_fold:
+    print('no data collected')
+    sys.exit(1)
+
+logs = ''
+for fold, (lv, myo, rv, mean_dice) in per_fold:
+    logs += f'Fold {fold}: LV {lv:.2f}  MYO {myo:.2f}  RV {rv:.2f}  Mean {mean_dice:.2f}\n'
+
+arr = np.array([v for _, v in per_fold])
 logs += (
-    f"\n=== {K}-Fold CV ({TARGET}) ===\n"
-    f"Mean: {dices.mean():.2f}\n"
-    f"Std : {dices.std():.2f}\n"
-    f"Min/Max: {dices.min():.2f} / {dices.max():.2f}\n"
+    f"\n=== {K}-Fold CV ({TARGET}, {NOTE}) ===\n"
+    f"LV : {arr[:, 0].mean():.2f}±{arr[:, 0].std():.2f}\n"
+    f"MYO: {arr[:, 1].mean():.2f}±{arr[:, 1].std():.2f}\n"
+    f"RV : {arr[:, 2].mean():.2f}±{arr[:, 2].std():.2f}\n"
+    f"Avg: {arr[:, 3].mean():.2f}±{arr[:, 3].std():.2f}\n"
 )
-
 print(logs)
-with open(os.path.join(BASE,NOTE+'_5折交叉验证'),'w') as f:
+
+out_file = os.path.join(BASE, f'{K}折交叉验证.txt')
+with open(out_file, 'w') as f:
     f.write(logs)
+print(f'saved: {out_file}')

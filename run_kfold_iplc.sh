@@ -6,7 +6,7 @@ TARGET=D
 K=5
 FOLD_JSON=./kfold_splits/mms/kfold_${TARGET}.json
 NOTE=IPLC
-GPU=0
+GPU=3
 
 for fold in $(seq 0 $((K-1))); do
     echo "=============================="
@@ -20,5 +20,5 @@ for fold in $(seq 0 $((K-1))); do
         --fold-id $fold \
         --note $NOTE \
         --epoch 20 \
-        --interval-valid 1
+        --interval-valid 5
 done

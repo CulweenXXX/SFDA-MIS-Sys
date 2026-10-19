@@ -280,17 +280,17 @@ def main():
         assert len(set(val_patients)   & set(test_patients)) == 0
         print('no patient overlap')
 
-        # 给 output 目录加 fold 后缀，避免覆盖
-        fold_suffix = f'_fold{args.fold_id}'
+        # 输出目录：{note}/fold_{fold_id}
+        fold_dir = f'fold_{args.fold_id}'
     else:
         train_patients = None
         val_patients   = None
         test_patients  = None
-        fold_suffix = ''
+        fold_dir = 'full'
 
     now = datetime.now()
     here = '/data0/grchen/SFDA_MIS_TestSys'
-    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note + fold_suffix)
+    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note, fold_dir)
     if not osp.exists(args.out):
         os.makedirs(args.out)
     args.out_file = open(osp.join(args.out, 'result.txt'), 'w')
@@ -357,6 +357,11 @@ def main():
     args.out_file.write(log_str + '\n')
     args.out_file.flush()
 
+    res_str = format_result('Source Only', 0, *evaluate(model, test_loader))
+    print(res_str)
+    args.out_file.write(res_str + '\n')
+    args.out_file.flush()
+
     for epoch in range(args.epoch):
         epoch_loss = adapt_epoch(tent, train_loader, args)
 
@@ -376,7 +381,9 @@ def main():
             args.out_file.write(res_str + '\n')
             args.out_file.flush()
 
-            # ----------------------------------- 
+            args.out_file.write('-'*32 + '\n')
+            args.out_file.flush()
+
             res_str = format_result('Test', epoch + 1, *evaluate(model, test_loader))
             print(res_str)
             args.out_file.write(res_str + '\n')

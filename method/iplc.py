@@ -316,11 +316,15 @@ def curvature_loss(output):
     return total_loss / B
 
 
-def adapt_epoch(model, optim, train_loader, args):
+def adapt_epoch(model, optims, train_loader, args):
+    enc_opt, dec_opt = optims
     predictor = get_sam_predictor(args)
     total_loss = 0.0
     num_batches = 0
     for _, sample in train_loader:
+        enc_opt.zero_grad()
+        dec_opt.zero_grad()
+
         imgs = sample['image']
         if torch.cuda.is_available():
             imgs = imgs.cuda()
@@ -344,8 +348,8 @@ def adapt_epoch(model, optim, train_loader, args):
         loss = seg_loss + args.curve_loss_weight * curve_loss
 
         loss.backward()
-        optim.step()
-        optim.zero_grad()
+        enc_opt.step()
+        dec_opt.step()
         total_loss += loss.item()
         num_batches += 1
     return total_loss / num_batches if num_batches > 0 else 0.0
@@ -372,16 +376,16 @@ def main():
         assert len(set(val_patients)   & set(test_patients)) == 0
         print('no patient overlap')
 
-        # 给 output 目录加 fold 后缀，避免覆盖
-        fold_suffix = f'_fold{args.fold_id}'
+        # 输出目录：{note}/fold_{fold_id}
+        fold_dir = f'fold_{args.fold_id}'
     else:
         train_patients = None
         val_patients   = None
         test_patients  = None
-        fold_suffix = ''
+        fold_dir = 'full'
 
     here = '/data0/grchen/SFDA_MIS_TestSys'
-    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note + fold_suffix)
+    args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note, fold_dir)
     if not osp.exists(args.out):
         os.makedirs(args.out)
     args.out_file = open(osp.join(args.out, 'result.txt'), 'w')
@@ -432,18 +436,25 @@ def main():
     if (args.gpu).find(',') != -1:
         model = torch.nn.DataParallel(model, device_ids=[0, 1])
 
-    optim = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999))
-    scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=args.lr_decrease_epoch, gamma=args.lr_decrease_rate)
+    base_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+    enc_opt = torch.optim.Adam(list(base_model.backbone.parameters()) + list(base_model.aspp.parameters()),
+                               lr=args.lr, betas=(0.9, 0.999))
+    dec_opt = torch.optim.Adam(base_model.decoder.parameters(), lr=args.lr, betas=(0.5, 0.999))
+    enc_sch = torch.optim.lr_scheduler.StepLR(enc_opt, step_size=args.lr_decrease_epoch, gamma=args.lr_decrease_rate)
+    dec_sch = torch.optim.lr_scheduler.StepLR(dec_opt, step_size=args.lr_decrease_epoch, gamma=args.lr_decrease_rate)
 
     model.train()
 
-    args.out_file.write(log_str + '\n')
+    res_str = format_result('Source Only', 0 , *evaluate(model, test_loader))
+    print(res_str)
+    args.out_file.write(res_str + '\n')
     args.out_file.flush()
 
     for epoch in range(args.epoch):
-        epoch_loss = adapt_epoch(model, optim, train_loader, args)
-      
-        scheduler.step()
+        epoch_loss = adapt_epoch(model, (enc_opt, dec_opt), train_loader, args)
+
+        enc_sch.step()
+        dec_sch.step()
 
         log_str = 'epoch {}/{}: loss {:.6f}'.format(epoch + 1, args.epoch, epoch_loss)
         print(log_str)
@@ -461,7 +472,9 @@ def main():
             args.out_file.write(res_str + '\n')
             args.out_file.flush()
 
-            # ----------------------------------- 
+            args.out_file.write('-'*32 + '\n')
+            args.out_file.flush()
+
             res_str = format_result('Test', epoch + 1, *evaluate(model, test_loader))
             print(res_str)
             args.out_file.write(res_str + '\n')
