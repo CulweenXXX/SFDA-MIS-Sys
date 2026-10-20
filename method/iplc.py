@@ -13,7 +13,7 @@ parser.add_argument('--out-stride', type=int, default=16)
 parser.add_argument('--sync-bn', type=bool, default=True)
 parser.add_argument('--freeze-bn', type=bool, default=False)
 parser.add_argument('--epoch', type=int, default=20)
-parser.add_argument('--lr', type=float, default=1e-4)
+parser.add_argument('--lr', type=float, default=1e-5)
 parser.add_argument('--lr-decrease-rate', type=float, default=0.9, help='ratio multiplied to initial lr')
 parser.add_argument('--lr-decrease-epoch', type=int, default=4, help='interval epoch number for lr decrease')
 
@@ -321,11 +321,11 @@ def adapt_epoch(model, optims, train_loader, args):
     predictor = get_sam_predictor(args)
     total_loss = 0.0
     num_batches = 0
-    for _, sample in train_loader:
+    for sample_w, sample_s in train_loader:
         enc_opt.zero_grad()
         dec_opt.zero_grad()
 
-        imgs = sample['image']
+        imgs = sample_w['image']
         if torch.cuda.is_available():
             imgs = imgs.cuda()
 

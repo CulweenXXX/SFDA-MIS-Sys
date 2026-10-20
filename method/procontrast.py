@@ -318,10 +318,10 @@ def pfa_adapt_epoch(model, prototypes, criterion, optim, train_loader, args):
     model.train()
     total_loss = 0.0
     num_batches = 0
-    for _, sample in train_loader:
+    for sample_w, sample_s in train_loader:
         optim.zero_grad()
 
-        imgs = sample['image']
+        imgs = sample_w['image']
         if torch.cuda.is_available():
             imgs = imgs.cuda()
 
@@ -348,10 +348,10 @@ def cl_adapt_epoch(model_s, model_t, contra_loss_fn, criterion_pseudo, optim,
     model_t.eval()
     total_loss = 0.0
     num_batches = 0
-    for _, sample in train_loader:
+    for sample_w, sample_s in train_loader:
         optim.zero_grad()
 
-        imgs = sample['image']
+        imgs = sample_w['image']
         if torch.cuda.is_available():
             imgs = imgs.cuda()
 

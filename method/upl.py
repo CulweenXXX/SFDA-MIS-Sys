@@ -236,8 +236,8 @@ def evaluate(model, val_loader):
 def adapt_epoch(upl_model, optims, train_loader, args):
     total_loss = 0.0
     num_batches = 0
-    for _, sample in train_loader:
-        imgs = sample['image']
+    for sample_w, sample_s in train_loader:
+        imgs = sample_w['image']
         if torch.cuda.is_available():
             imgs = imgs.cuda()
 

@@ -72,7 +72,8 @@ python collect_kfold.py --target D --note Tent
   2. SAM-Med2D 以 prompt + 64×64 上采样概率图作为 `mask_input` 预测，聚合多次采样结果得到类别概率图；
   3. 由概率图熵生成权重图 `(2 − H) / 2`，argmax + 最大连通域得到修正伪标签；
   4. 损失 = 熵加权 Dice 损失（伪标签）+ `--curve-loss-weight 0.01` × 平均负曲率损失（mean negative curvature，促进边界平滑）；
-  5. Adam 分组优化：encoder + ASPP（lr 1e-4）与 decoder（lr 1e-4），每 4 epoch ×0.9；下一 epoch 用更新后的模型重新生成伪标签（对应 ICL 迭代修正的简化实现，`--epoch 20`）。
+  5. Adam 分组优化：encoder + ASPP 与 decoder（复现配置 `--lr 1e-5`，官方 1e-4；每 4 epoch ×0.9）；下一 epoch 用更新后的模型重新生成伪标签（对应 ICL 迭代修正的简化实现；复现配置 `--epoch 5`，官方 20）。
+- **复现配置**：`run_kfold_iplc.sh` 使用 `--lr 1e-5 --epoch 5 --interval-valid 1`。官方 1e-4/20 epoch 在 DeepLabv3+/3D volume 设置下从第 1 个 epoch 后持续下降，D 域 5 折 Avg 81.21，低于 Source Only 83.26；降到 1e-5、5 epoch 后 D 域 5 折 Avg 85.08±1.42（Source Only 83.26±1.81），5 折均优于源模型。官方超参日志保留在 `logs_target/mms/D/IPLC_official_hparams/`。
 - **说明**：官方实现为 UNet + 迭代内循环；本实现为统一 DeepLabv3+/M&MS 协议做了适配，熵加权与曲率监督与论文一致。
 
 ### 1.2 UPL — `method/upl.py`
