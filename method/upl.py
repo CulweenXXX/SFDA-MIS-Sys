@@ -30,6 +30,8 @@ parser.add_argument('--pseudo-label-threshold', type=float, default=0.95)
 parser.add_argument('--mean-loss-calc-bound-ratio', type=float, default=0.2)
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid',type=int,default=1)
+parser.add_argument('--skip-empty-slices', type=str2bool, default=True,
+                    help='skip slices without foreground GT during evaluation')
 
 parser.add_argument('--fold-json', type=str, default=None,
                     help='K-fold 划分文件路径，如 kfold_splits/mms/kfold_B.json')
@@ -160,6 +162,12 @@ class UPLDeepLabV3Plus(nn.Module):
 
         return (self.aux_seg_1 + self.aux_seg_2 + self.aux_seg_3 + self.aux_seg_4) / 4.0
 
+    def forward_single(self, x):
+        high, low = self.backbone(x)
+        aspp = self.aspp(high)
+        out, _ = self.aux_dec4(aspp, low)
+        return F.interpolate(out, size=x.size()[2:], mode='bilinear', align_corners=True).softmax(1)
+
     def save_nii(self,x):
         self.forward(x)
         pred_aux1 = self.aux_seg_1.cpu().detach().numpy()
@@ -195,12 +203,16 @@ class UPLDeepLabV3Plus(nn.Module):
 
 
 class EvalWrapper(nn.Module):
-    def __init__(self, model):
+    def __init__(self, model, ensemble=True):
         super().__init__()
         self.model = model
+        self.ensemble = ensemble
 
     def forward(self, image):
-        prob = self.model(image)
+        if self.ensemble:
+            prob = self.model(image)
+        else:
+            prob = self.model.forward_single(image)
         return torch.log(prob + 1e-6), None
 
 
@@ -229,8 +241,9 @@ class SliceLoaderWrapper:
         return len(self.loader)
 
 
-def evaluate(model, val_loader):
-    return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES)
+def evaluate(model, val_loader, ensemble=True):
+    return _metrics_evaluate(EvalWrapper(model, ensemble=ensemble), SliceLoaderWrapper(val_loader),
+                             NUM_CLASSES, NAMES, skip_empty_slices=args.skip_empty_slices)
 
 
 def adapt_epoch(upl_model, optims, train_loader, args):
@@ -357,7 +370,7 @@ def main():
 
     upl_model.train()
 
-    res_str = format_result('Source Only', 0, *evaluate(upl_model, test_loader))
+    res_str = format_result('Source Only', 0, *evaluate(upl_model, test_loader, ensemble=False))
     print(res_str)
     args.out_file.write(res_str + '\n')
     args.out_file.flush()

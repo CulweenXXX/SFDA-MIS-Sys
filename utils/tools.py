@@ -1,6 +1,13 @@
 from scipy import ndimage
 import numpy as np
 
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ('1', 'true', 'yes', 'y')
+
+
 def get_largest_component(image):
     """
     get the largest component from 2D or 3D binary image

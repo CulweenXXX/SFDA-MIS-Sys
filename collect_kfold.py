@@ -36,7 +36,7 @@ def extract_metrics(content, prefix):
 
 def extract_last_test_dice(content):
     """抓最后一个 Test（MT 优先 Student Test）的 Dice"""
-    for prefix in (r'Student Test \d+ Dice', r'Test \d+ Dice'):
+    for prefix in (r'CL Best Test \d+ Dice', r'Student Test \d+ Dice', r'Test \d+ Dice'):
         values = extract_metrics(content, prefix)
         if values is not None:
             return values

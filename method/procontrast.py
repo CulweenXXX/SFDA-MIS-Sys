@@ -1,6 +1,7 @@
 import argparse
 from utils.metrics import *
 from utils.metrics import evaluate as _metrics_evaluate
+from utils.tools import str2bool
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-g', '--gpu', type=str, default='0')
@@ -47,6 +48,8 @@ parser.add_argument('--bg-queue-size', type=int, default=50000)
 
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid', type=int, default=1)
+parser.add_argument('--skip-empty-slices', type=str2bool, default=True,
+                    help='skip slices without foreground GT during evaluation')
 
 parser.add_argument('--fold-json', type=str, default=None,
                     help='K-fold 划分文件路径，如 kfold_splits/mms/kfold_B.json')
@@ -125,7 +128,8 @@ class SliceLoaderWrapper:
 
 
 def evaluate(model, val_loader):
-    return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES)
+    return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES,
+                             skip_empty_slices=args.skip_empty_slices)
 
 
 class ProtoLoss(nn.Module):
@@ -410,6 +414,15 @@ def base_model_of(model):
     return model.module if isinstance(model, torch.nn.DataParallel) else model
 
 
+def clone_state_dict(model):
+    return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+
+def load_state_dict(model, state):
+    if state is not None:
+        model.load_state_dict(state)
+
+
 def main():
     # ---------- 读取 K-fold 划分 ----------
     if args.fold_json is not None and args.fold_id is not None:
@@ -498,6 +511,11 @@ def main():
     pfa_scheduler = torch.optim.lr_scheduler.StepLR(pfa_optim, step_size=args.pfa_lr_decrease_epoch,
                                                     gamma=args.pfa_lr_decrease_rate)
 
+    best_pfa_dice = -1.0
+    best_pfa_epoch = 0
+    best_pfa_state = None
+    best_pfa_metrics = None
+
     for epoch in range(args.pfa_epoch):
         epoch_loss = pfa_adapt_epoch(model, source_prototypes, criterion_proto, pfa_optim, train_loader, args)
         pfa_scheduler.step()
@@ -507,17 +525,25 @@ def main():
         args.loss_file.write(log_str + '\n')
         args.loss_file.flush()
 
+        val_metrics = evaluate(model, val_loader)
+        val_dice = float(val_metrics[6])
+        if val_dice > best_pfa_dice:
+            best_pfa_dice = val_dice
+            best_pfa_epoch = epoch + 1
+            best_pfa_state = clone_state_dict(model)
+            best_pfa_metrics = val_metrics
+
+        log_str = '\nPFA epoch {}/{}:'.format(epoch + 1, args.pfa_epoch)
+        print(log_str)
+        args.out_file.write(log_str + '\n')
+        args.out_file.flush()
+
+        res_str = format_result('PFA Val', epoch + 1, *val_metrics)
+        print(res_str)
+        args.out_file.write(res_str + '\n')
+        args.out_file.flush()
+
         if (epoch + 1) % args.interval_valid == 0:
-            log_str = '\nPFA epoch {}/{}:'.format(epoch + 1, args.pfa_epoch)
-            print(log_str)
-            args.out_file.write(log_str + '\n')
-            args.out_file.flush()
-
-            res_str = format_result('PFA Val', epoch + 1, *evaluate(model, val_loader))
-            print(res_str)
-            args.out_file.write(res_str + '\n')
-            args.out_file.flush()
-
             args.out_file.write('-'*32 + '\n')
             args.out_file.flush()
 
@@ -525,6 +551,24 @@ def main():
             print(res_str)
             args.out_file.write(res_str + '\n')
             args.out_file.flush()
+
+    if best_pfa_state is not None:
+        load_state_dict(model, best_pfa_state)
+        log_str = '\nPFA best checkpoint: epoch {}, val Dice {:.2f}'.format(
+            best_pfa_epoch, best_pfa_dice * 100)
+        print(log_str)
+        args.out_file.write(log_str + '\n')
+        args.out_file.flush()
+
+        res_str = format_result('PFA Best Val', best_pfa_epoch, *best_pfa_metrics)
+        print(res_str)
+        args.out_file.write(res_str + '\n')
+        args.out_file.flush()
+
+        res_str = format_result('PFA Best Test', best_pfa_epoch, *evaluate(model, test_loader))
+        print(res_str)
+        args.out_file.write(res_str + '\n')
+        args.out_file.flush()
 
     # ------------------------- CL stage -------------------------
     teacher = netd.DeepLab(num_classes=NUM_CLASSES, backbone='mobilenet', output_stride=args.out_stride,
@@ -551,6 +595,12 @@ def main():
 
     total_steps = max(args.cl_epoch * len(train_loader), 1)
     step = 0
+    patience = 2
+    bad_epochs = 0
+    best_cl_dice = -1.0
+    best_cl_epoch = 0
+    best_cl_state = None
+    best_cl_metrics = None
 
     for epoch in range(args.cl_epoch):
         epoch_loss, step = cl_adapt_epoch(model, teacher, contra_loss_fn, criterion_pseudo, cl_optim,
@@ -562,17 +612,28 @@ def main():
         args.loss_file.write(log_str + '\n')
         args.loss_file.flush()
 
+        val_metrics = evaluate(model, val_loader)
+        val_dice = float(val_metrics[6])
+        if val_dice > best_cl_dice:
+            best_cl_dice = val_dice
+            best_cl_epoch = epoch + 1
+            best_cl_state = clone_state_dict(model)
+            best_cl_metrics = val_metrics
+            bad_epochs = 0
+        else:
+            bad_epochs += 1
+
+        log_str = '\nCL epoch {}/{}:'.format(epoch + 1, args.cl_epoch)
+        print(log_str)
+        args.out_file.write(log_str + '\n')
+        args.out_file.flush()
+
+        res_str = format_result('CL Val', epoch + 1, *val_metrics)
+        print(res_str)
+        args.out_file.write(res_str + '\n')
+        args.out_file.flush()
+
         if (epoch + 1) % args.interval_valid == 0:
-            log_str = '\nCL epoch {}/{}:'.format(epoch + 1, args.cl_epoch)
-            print(log_str)
-            args.out_file.write(log_str + '\n')
-            args.out_file.flush()
-
-            res_str = format_result('Val', epoch + 1, *evaluate(model, val_loader))
-            print(res_str)
-            args.out_file.write(res_str + '\n')
-            args.out_file.flush()
-
             args.out_file.write('-'*32 + '\n')
             args.out_file.flush()
 
@@ -580,6 +641,32 @@ def main():
             print(res_str)
             args.out_file.write(res_str + '\n')
             args.out_file.flush()
+
+        if bad_epochs >= patience:
+            log_str = 'CL early stop at epoch {}: no val improvement for {} epochs'.format(
+                epoch + 1, bad_epochs)
+            print(log_str)
+            args.out_file.write(log_str + '\n')
+            args.out_file.flush()
+            break
+
+    if best_cl_state is not None:
+        load_state_dict(model, best_cl_state)
+        log_str = '\nCL best checkpoint: epoch {}, val Dice {:.2f}'.format(
+            best_cl_epoch, best_cl_dice * 100)
+        print(log_str)
+        args.out_file.write(log_str + '\n')
+        args.out_file.flush()
+
+        res_str = format_result('CL Best Val', best_cl_epoch, *best_cl_metrics)
+        print(res_str)
+        args.out_file.write(res_str + '\n')
+        args.out_file.flush()
+
+        res_str = format_result('CL Best Test', best_cl_epoch, *evaluate(model, test_loader))
+        print(res_str)
+        args.out_file.write(res_str + '\n')
+        args.out_file.flush()
 
 
 if __name__ == '__main__':

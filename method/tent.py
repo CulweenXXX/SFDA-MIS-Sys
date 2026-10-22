@@ -2,6 +2,7 @@ import argparse
 from torch import Tensor
 from utils.metrics import *
 from utils.metrics import evaluate as _metrics_evaluate
+from utils.tools import str2bool
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-g', '--gpu', type=str, default='0')
@@ -27,6 +28,8 @@ parser.add_argument('--steps', type=int, default=1, help='gradient steps of tent
 parser.add_argument('--episodic', action='store_true', help='reset model/optimizer before each batch')
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid',type=int,default=1)
+parser.add_argument('--skip-empty-slices', type=str2bool, default=True,
+                    help='skip slices without foreground GT during evaluation')
 
 parser.add_argument('--fold-json', type=str, default=None,
                     help='K-fold 划分文件路径，如 kfold_splits/mms/kfold_B.json')
@@ -108,7 +111,8 @@ class SliceLoaderWrapper:
 
 
 def evaluate(model, val_loader):
-    return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES)
+    return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES,
+                             skip_empty_slices=args.skip_empty_slices)
 
 
 # ------------------------- tent core -------------------------

@@ -1,13 +1,13 @@
 #!/bin/bash
 # 用法: bash run_kfold_tent.sh
-# fold 0/1/2/3 分别在 GPU 0/1/2/3 上并行跑，都结束后 fold 4 在 GPU 0 上跑
+# 仅使用 GPU 0/1，每次最多并行跑 2 个 fold
 
 cd "$(dirname "$0")"
 export PYTHONPATH=.
 
 TARGET=D
 FOLD_JSON=./kfold_splits/mms/kfold_${TARGET}.json
-NOTE=Tent
+NOTE=Tent_noSkip
 
 # run_fold <fold编号> <GPU编号>
 run_fold() {
@@ -26,13 +26,10 @@ run_fold() {
         --momentum 0.9 \
         --steps 1 \
         --epoch 20 \
-        --interval-valid 5
+        --interval-valid 5 \
+        --skip-empty-slices False
 }
 
-run_fold 0 0 &
-run_fold 1 1 &
-run_fold 2 2 &
-run_fold 3 3 &
-wait
-
+run_fold 0 0 & run_fold 1 1 & wait
+run_fold 2 0 & run_fold 3 1 & wait
 run_fold 4 0

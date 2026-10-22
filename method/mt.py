@@ -2,6 +2,7 @@ import argparse
 from torch import Tensor
 from utils.metrics import *
 from utils.metrics import evaluate as _metrics_evaluate
+from utils.tools import str2bool
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-g', '--gpu', type=str, default='0')
@@ -28,6 +29,8 @@ parser.add_argument('--pseudo-label-threshold', type=float, default=0.75)
 parser.add_argument('--mean-loss-calc-bound-ratio', type=float, default=0.2)
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid',type=int,default=1)
+parser.add_argument('--skip-empty-slices', type=str2bool, default=True,
+                    help='skip slices without foreground GT during evaluation')
 
 parser.add_argument('--fold-json', type=str, default=None,
                     help='K-fold 划分文件路径，如 kfold_splits/mms/kfold_B.json')
@@ -108,7 +111,8 @@ class SliceLoaderWrapper:
 
 
 def evaluate(model, val_loader):
-    return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES)
+    return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES,
+                             skip_empty_slices=args.skip_empty_slices)
 
 
 def soft_label_to_hard(soft_pls, pseudo_label_threshold):
@@ -196,7 +200,6 @@ def main():
         test_patients  = None
         fold_dir = 'full'
 
-    now = datetime.now()
     here = '/data0/grchen/SFDA_MIS_TestSys'
     args.out = osp.join(here, 'logs_target', args.dataset, args.target, args.note, fold_dir)
     if not osp.exists(args.out):

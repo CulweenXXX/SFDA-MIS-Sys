@@ -108,6 +108,7 @@ python collect_kfold.py --target D --note Tent
   3. **CL 阶段**：以 PFA 结束的模型复制一份作为 frozen teacher（eval、不更新）；teacher 伪标签 + 熵分位掩码把像素分为低熵（anchor 正原型）与高熵（memory bank 负样本队列，`--queue-size 30000` / `--bg-queue-size 50000`），做原型对比损失（`--num-queries 64`、`--num-negatives 256`，可选 `--momentum-prototype`、`--use-source-prototypes`）；
   4. 可选熵过滤伪标签 CE（`--use-pseudo`，按 epoch 逐步放宽 `--drop-percent`）；Adam lr 1e-4。
 - **本地映射**：对应官方仓库的 `train_target_adapt_PFA.yaml` / `train_target_adapt_CL.yaml` 两个 stage，网络与评测协议统一为 DeepLabv3+/M&MS。
+- **本地差异（best-validation）**：按官方 PFA/CL 的 best-checkpoint 协议，每 epoch 用 val Dice 选择最优模型；PFA 最优模型用于初始化 CL 的 teacher/student；CL 连续 2 epoch 无提升则 early stop；最终报告 best checkpoint 的 test 指标。其他方法目前仍报告最后一个 epoch，跨方法对比时需注意这一差异。
 
 ### 1.5 MT — `method/mt.py`
 
