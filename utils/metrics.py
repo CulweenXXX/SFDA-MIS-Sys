@@ -3,21 +3,28 @@ import numpy as np
 import surface_distance as surfdist
 import torch.nn.functional as F
 
-def format_result(name, epoch, dice_means, dice_stds, assd_means, assd_stds,
+def format_result(name, epoch, class_names, dice_means, dice_stds, assd_means, assd_stds,
                   hd95_means, hd95_stds, mean_dice, mean_dice_std,
                   mean_assd, mean_assd_std, mean_hd95, mean_hd95_std):
-    res_str = '{} {} Dice - LV: {:.2f}\u00b1{:.2f} MYO: {:.2f}\u00b1{:.2f} RV: {:.2f}\u00b1{:.2f}, Mean (LV,MYO,RV): {:.2f}\u00b1{:.2f}'.format(
-        name, epoch,
-        dice_means[0] * 100, dice_stds[0] * 100, dice_means[1] * 100, dice_stds[1] * 100,
-        dice_means[2] * 100, dice_stds[2] * 100, mean_dice * 100, mean_dice_std * 100)
-    res_str += '\n{} {} ASSD - LV: {:.4f}\u00b1{:.4f} MYO: {:.4f}\u00b1{:.4f} RV: {:.4f}\u00b1{:.4f}, Mean (LV,MYO,RV): {:.4f}\u00b1{:.4f}'.format(
-        name, epoch,
-        assd_means[0], assd_stds[0], assd_means[1], assd_stds[1], assd_means[2], assd_stds[2],
-        mean_assd, mean_assd_std)
-    res_str += '\n{} {} HD95 - LV: {:.4f}\u00b1{:.4f} MYO: {:.4f}\u00b1{:.4f} RV: {:.4f}\u00b1{:.4f}, Mean (LV,MYO,RV): {:.4f}\u00b1{:.4f}'.format(
-        name, epoch,
-        hd95_means[0], hd95_stds[0], hd95_means[1], hd95_stds[1], hd95_means[2], hd95_stds[2],
-        mean_hd95, mean_hd95_std)
+    class_names = list(class_names)
+    n = len(dice_means)
+    if len(class_names) == n + 1:
+        class_names = class_names[1:]
+    elif len(class_names) > n:
+        class_names = class_names[len(class_names) - n:]
+
+    def _format_metric(metric_name, means, stds, mean, mean_std, scale, ndigits):
+        per_class = ' '.join(
+            '{}: {:.{p}f}\u00b1{:.{p}f}'.format(nm, m * scale, s * scale, p=ndigits)
+            for nm, m, s in zip(class_names, means, stds)
+        )
+        return '{} {} {} - {}, Mean ({}): {:.{p}f}\u00b1{:.{p}f}'.format(
+            name, epoch, metric_name, per_class, ','.join(class_names),
+            mean * scale, mean_std * scale, p=ndigits)
+
+    res_str = _format_metric('Dice', dice_means, dice_stds, mean_dice, mean_dice_std, 100.0, 2)
+    res_str += '\n' + _format_metric('ASSD', assd_means, assd_stds, mean_assd, mean_assd_std, 1.0, 2)
+    res_str += '\n' + _format_metric('HD95', hd95_means, hd95_stds, mean_hd95, mean_hd95_std, 1.0, 2)
     return res_str
 
 
@@ -130,6 +137,37 @@ def collect_predictions_mmwhs(model, val_loader,skip_empty_slices=False):
         
     return pred_results_list, gt_segs_list
 
+def collect_predictions_pnp(model, data_loader,skip_empty_slices=False):
+    model.eval()
+    # 用 List 收集所有的 Batch
+    all_preds = []
+    all_gts = []
+    
+    with torch.no_grad():
+        for sample in data_loader:
+            data = sample['image'].cuda()
+            target_map = sample['label']
+            
+            # 获取网络输出并转类别 [B, C, H, W] -> [B, H, W]
+            predictions = _model_logits(model, data)
+            pred_cls = predictions.detach().cpu()
+            gt_cls = target_map.cpu()
+
+            all_preds.append(pred_cls)
+            all_gts.append(gt_cls)
+            
+    # 在切片维度（维度0）拼接
+    # 假设 loader 是严格按顺序读取的，拼接后就是完整的 3D 体积
+    pred_vol = torch.cat(all_preds, dim=0)   # [N*600, H, W]
+    gt_vol   = torch.cat(all_gts,   dim=0)
+    
+    pred_cases = list(torch.split(pred_vol, 600, dim=0))   # list of [600, H, W]
+    gt_cases   = list(torch.split(gt_vol,   600, dim=0))
+
+    pred_results_list = [p.permute(1, 2, 3, 0).contiguous() for p in pred_cases]   # [C,H,W,N_i]
+    gt_segs_list   = [g.permute(1, 2, 0).contiguous()    for g in gt_cases]     # [H,W,N_i]
+
+    return pred_results_list, gt_segs_list
 
 def _to_index_volume(pred, gt):
     if torch.is_tensor(pred):
@@ -191,5 +229,5 @@ def evaluate(model, val_loader, num_classes, names, skip_empty_slices=True,
     mean_assd_std = float(np.nanstd(assd_means))
     mean_hd95 = float(np.nanmean(hd95_means))
     mean_hd95_std = float(np.nanstd(hd95_means))
-    return (dice_means, dice_stds, assd_means, assd_stds, hd95_means, hd95_stds,
+    return (NAMES, dice_means, dice_stds, assd_means, assd_stds, hd95_means, hd95_stds,
             mean_dice, mean_dice_std, mean_assd, mean_assd_std, mean_hd95, mean_hd95_std)

@@ -21,8 +21,7 @@ parser.add_argument('--source', type=str, default='ct', choices=['ct', 'mr'])
 parser.add_argument('--target', type=str, default='mr', choices=['ct', 'mr'])
 parser.add_argument('--batch-size', type=int, default=64)
 
-parser.add_argument('--optimizer', type=str, default='SGD', choices=['SGD', 'Adam'])
-parser.add_argument('--lr', type=float, default=1e-3)
+parser.add_argument('--lr', type=float, default=5e-4)
 parser.add_argument('--momentum', type=float, default=0.9)
 parser.add_argument('--steps', type=int, default=1, help='gradient steps of tent on each batch')
 parser.add_argument('--episodic', action='store_true', help='reset model/optimizer before each batch')
@@ -243,8 +242,8 @@ def adapt_epoch(tent, train_loader, args):
     tent.model.train()
     total_loss = 0.0
     num_batches = 0
-    for sample_w, sample_s in train_loader:
-        imgs = sample_w['image']
+    for sample in train_loader:
+        imgs = sample['image']
         if torch.cuda.is_available():
             imgs = imgs.cuda()
 
@@ -269,7 +268,7 @@ def main():
     # args.out_file.write(print_args(args) + '\n')
     args.out_file.flush()
 
-    train_dataset = mmwhs_dataset_2transform(rootdir=args.data_dir, modality=args.target,
+    train_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
                                              phase='train', mode='adapt')
     val_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
                                 phase='val', mode='adapt')
@@ -312,10 +311,7 @@ def main():
     configure_model(model)
     check_model(model)
     params, names = collect_params(model)
-    if args.optimizer == 'SGD':
-        optim = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum)
-    else:
-        optim = torch.optim.Adam(params, lr=args.lr, betas=(0.9, 0.999))
+    optim = torch.optim.Adam(params, lr=args.lr, betas=(0.9, 0.999))
     tent = Tent(model, optim, steps=args.steps, episodic=args.episodic)
 
     log_str = 'tent: adapt %d / %d params' % (sum(p.numel() for p in params),

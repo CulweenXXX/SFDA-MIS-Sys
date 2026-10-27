@@ -45,6 +45,31 @@ train_transforms = A.Compose([
     A.Resize(height=256, width=256)
 ])
 
+adapt_transforms = A.Compose([
+    # 1. 空间增强
+    # A.Rotate(limit=15, p=0.5),
+    # A.Affine(translate_percent=(-0.1, 0.1), scale=(0.9, 1.1), rotate=0, p=0.5),
+    # A.ElasticTransform(alpha=1, sigma=50, p=0.3),
+    
+    # 2. 外观增强 (应对 Domain Shift)
+    A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
+    A.GaussNoise(std_range=(0.03, 0.07), p=0.3),
+    # A.RandomGamma(gamma_limit=(80, 120), p=0.3),
+    
+    # 3. 防止过拟合的遮挡
+    # A.CoarseDropout(
+    #     num_holes_range=(1, 8),
+    #     hole_height_range=(16, 16),
+    #     hole_width_range=(16, 16),
+    #     fill=0,
+    #     fill_mask=0,
+    #     p=0.3
+    # ),
+    
+    # 4. 统一尺寸
+    A.Resize(height=256, width=256)
+])
+
 IMAGE_TAG = 'img'
 LABEL_TAG = 'label'
 
@@ -89,6 +114,53 @@ class mmwhs_dataset(data.Dataset):
         }
         
         return sample
+    
+    def __len__(self):
+        return len(self.all_data_path)
+
+
+
+class mmwhs_dataset_2transform(data.Dataset):
+    def __init__(self, rootdir, modality, phase='train',mode = 'source'):
+        self.rootdir = rootdir          # root_path
+        self.modality = modality        # ct
+        self.phase = phase              # train
+        self.mode = mode
+        self.all_data_path = []
+        self.all_label_path = []
+
+        self.all_data_path, self.all_label_path = collect_image_label_paths(
+            self.rootdir, self.modality, phase)
+        
+    def __getitem__(self, index):
+        img,lab = np.load(self.all_data_path[index]),np.load(self.all_label_path[index])
+        # e.g. ct_train/ct_train_slice7_img.npy
+        filename = os.path.basename(self.all_data_path[index]).split('.')[0]
+
+        # image : [256 ,256, 3]
+        # label : [256 ,256]
+
+        if self.phase == 'train': 
+            augmented = adapt_transforms(image=img, mask=lab)
+            img_aug = augmented['image']
+            lab_aug = augmented['mask']
+
+        img = torch.from_numpy(img).permute(2, 0, 1).float()    # [3,256,256]
+        img_aug = torch.from_numpy(img_aug).permute(2, 0, 1).float()    # [3,256,256]
+        lab_aug = torch.from_numpy(lab_aug.astype(np.int64)).long()     # [256, 256]
+
+        sample_w = {
+            'image': img,
+            'label': lab,
+            'filename': filename
+        }
+
+        sample_s = {
+            'image': img_aug,
+            'label': lab_aug,
+            'filename': filename
+        }
+        return sample_w, sample_s
     
     def __len__(self):
         return len(self.all_data_path)
