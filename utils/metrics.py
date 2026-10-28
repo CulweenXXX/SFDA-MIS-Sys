@@ -105,38 +105,6 @@ def collect_predictions_mms(model, val_loader, skip_empty_slices=True):
     model.train()
     return pred_results_list, gt_segs_list
 
-
-def collect_predictions_mmwhs(model, val_loader,skip_empty_slices=False):
-    """MM-WHS：按该数据集的 sample 格式实现。"""
-    model.eval()
-    case_slices = {}  # case_name -> [(slice_idx, pred_cls[H,W], gt_cls[H,W]), ...]
-
-    with torch.no_grad():
-        for sample in val_loader:
-            image = sample['image'].cuda()
-            label = sample['label'].cuda().long()
-
-            predictions = _model_logits(model, image)
-
-            pred_cls = predictions.detach().cpu()
-            gt_cls = label.detach().cpu()
-
-            for i in range(pred_cls.shape[0]):
-                case_slices.setdefault(sample['case_name'][i], []).append(
-                    (int(sample['slice_idx'][i]), pred_cls[i], gt_cls[i]))
-
-    pred_results_list = []
-    gt_segs_list = []
-    for case_name in sorted(case_slices):
-        slices = sorted(case_slices[case_name], key=lambda item: item[0])
-        pred_vol =torch.stack([item[1] for item in slices], dim=-1)  # [C,H,W,D]
-        gt_vol = torch.stack([item[2] for item in slices], dim=-1)    # [H,W,D]
-
-        pred_results_list.append(pred_vol)
-        gt_segs_list.append(gt_vol)
-        
-    return pred_results_list, gt_segs_list
-
 def collect_predictions_pnp(model, data_loader,skip_empty_slices=False):
     model.eval()
     # 用 List 收集所有的 Batch
@@ -167,6 +135,7 @@ def collect_predictions_pnp(model, data_loader,skip_empty_slices=False):
     pred_results_list = [p.permute(1, 2, 3, 0).contiguous() for p in pred_cases]   # [C,H,W,N_i]
     gt_segs_list   = [g.permute(1, 2, 0).contiguous()    for g in gt_cases]     # [H,W,N_i]
 
+    model.train()
     return pred_results_list, gt_segs_list
 
 def _to_index_volume(pred, gt):

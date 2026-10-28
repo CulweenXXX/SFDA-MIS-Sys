@@ -16,7 +16,7 @@ parser.add_argument('--lr', type=float, default=5e-4)
 parser.add_argument('--lr-decrease-rate', type=float, default=0.95, help='ratio multiplied to initial lr')
 parser.add_argument('--lr-decrease-epoch', type=int, default=1, help='interval epoch number for lr decrease')
 
-parser.add_argument('--data-dir', default='/data0/grchen/Data/processed_MMWHS')
+parser.add_argument('--data-dir', default='/data0/grchen/Data/mmwhs')
 parser.add_argument('--dataset', type=str, default='mmwhs')
 parser.add_argument('--source', type=str, default='ct',choices=['ct','mr'])
 parser.add_argument('--target', type=str, default='mr',choices=['ct','mr'])
@@ -29,7 +29,7 @@ parser.add_argument('--pseudo-label-threshold', type=float, default=0.75)
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid',type=int,default=1)
 
-
+parser.add_argument('--normal', type=bool, default=False)
 args = parser.parse_args()
 
 import os
@@ -103,8 +103,32 @@ class SliceLoaderWrapper:
 
 def evaluate(model, val_loader):
     return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES,
-                             skip_empty_slices=args.skip_empty_slices,collect_fn=collect_predictions_mmwhs)
+                             skip_empty_slices=args.skip_empty_slices,collect_fn=collect_predictions_pnp)
 
+def discrepancy_calconsis(v1, v2):
+    assert v1.dim() == 4
+    assert v2.dim() == 4
+    n, c, h, w = v1.size()
+    inner = torch.mul(v1, v2)
+    v1 = v1.permute(2, 3, 1, 0)
+    v2 = v2.permute(2, 3, 0, 1)
+    mul = v1.matmul(v2)
+    mul = mul.permute(2, 3, 0, 1)
+    dis = torch.sum(mul) - torch.sum(inner)
+    dis = dis / (h * w)
+    return dis
+
+def discrepancy_calc_contra(v1, v2):
+    assert v1.dim() == 4
+    assert v2.dim() == 4
+    n, c, h, w = v1.size()
+    inner = torch.mul(v1, v2)
+    v1 = v1.permute(2, 3, 1, 0)
+    v2 = v2.permute(2, 3, 0, 1)
+    mul = v1.matmul(v2)
+    mul = mul.permute(2, 3, 0, 1)
+
+    return mul
 
 @torch.no_grad()
 def update_ema(teacher, student, decay):
@@ -112,6 +136,14 @@ def update_ema(teacher, student, decay):
     for t_p, s_p in zip(teacher.parameters(), student.parameters()):
         t_p.data = decay * t_p.data + (1 - decay) * s_p.data
     
+def soft_label_to_hard(soft_pls, pseudo_label_threshold):
+    pseudo_labels = torch.zeros(soft_pls.size())
+    if torch.cuda.is_available():
+        pseudo_labels = pseudo_labels.cuda()
+    pseudo_labels[soft_pls > pseudo_label_threshold] = 1
+    pseudo_labels[soft_pls <= pseudo_label_threshold] = 0
+
+    return pseudo_labels
 
 def adapt_epoch(model_t, model_s, optim, train_loader, args):
     total_loss = 0.0
@@ -129,14 +161,29 @@ def adapt_epoch(model_t, model_s, optim, train_loader, args):
             predictions_tea_w = model_t(imgs_w)['out']
 
         ###softmax
-        # predictions_stu_s_softmax: Tensor = F.softmax(predictions_stu_s, dim=1)
+        predictions_stu_s_softmax: Tensor = F.softmax(predictions_stu_s, dim=1)
         predictions_tes_w_softmax: Tensor = F.softmax(predictions_tea_w, dim=1)
-        pseudo_label = torch.argmax(predictions_tes_w_softmax,dim=1)
+        pseudo_labels = soft_label_to_hard(predictions_tes_w_softmax,args.pseudo_label_threshold)
 
-        # only basic pseudo-label loss
-        loss = F.cross_entropy(predictions_stu_s, pseudo_label)
-        # loss = F.cross_entropy(predictions_stu_s, pseudo_label,reduction='none')
-        # loss = (loss * mask).sum() / mask.sum()
+
+        loss_seg = F.cross_entropy(predictions_stu_s, pseudo_labels)
+
+        f = lambda x: torch.exp(x / 0.07)
+        z1z2 = discrepancy_calc_contra(f(predictions_stu_s_softmax), f(predictions_tes_w_softmax))
+        z1z1 = discrepancy_calc_contra(f(predictions_stu_s_softmax), f(predictions_stu_s_softmax))
+
+        diag_z1z2 = z1z2.diagonal(dim1=-2, dim2=-1).sum()
+        diag_z1z1 = z1z1.diagonal(dim1=-2, dim2=-1).sum()
+        # diag_z2z2 = z2z2.diagonal(dim1=-2, dim2=-1).sum()
+        sum_z1z2 = z1z2.sum()
+        sum_z1z1 = z1z1.sum()
+        # sum_z2z2 = z2z2.sum()
+        loss_contra = -torch.log(diag_z1z2 / sum_z1z2 + sum_z1z1 - diag_z1z1)
+
+        ######################################################################################
+        loss_consis = discrepancy_calconsis(predictions_stu_s_softmax,predictions_tes_w_softmax)
+        ########################################################################
+        loss = loss_contra + loss_seg + 1*loss_consis
 
         loss.backward()
         optim.step()
@@ -159,11 +206,29 @@ def main():
     # args.out_file.write(print_args(args) + '\n')
     args.out_file.flush()
 
-    train_dataset = mmwhs_dataset_2transform(rootdir=args.data_dir, modality=args.target, phase='train',mode = 'adapt')
-    val_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target, phase='val',mode = 'adapt')
+    if args.normal == True:
+        train_dataset = mmwhs_dataset_normal_2transform(rootdir=args.data_dir, modality=args.target,
+                                                phase='train', mode='adapt')
+        val_dataset = mmwhs_dataset_normal(rootdir=args.data_dir, modality=args.target,
+                                    phase='val', mode='adapt')
+        if args.source == 'ct':
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct_normal/source_model_ct.pth.tar'
+        elif args.source == 'mr':
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr_normal/source_model_mr.pth.tar'
+    else:
+        train_dataset = mmwhs_dataset_2transform(rootdir=args.data_dir, modality=args.target,
+                                                        phase='train', mode='adapt')
+        val_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
+                                    phase='val', mode='adapt')
+        if args.source == 'ct':
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_ct.pth.tar'
+        elif args.source == 'mr':
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mr.pth.tar'
 
-    train_loader = DataLoader(dataset=train_dataset,batch_size=args.batch_size,shuffle=True, drop_last=True)
-    val_loader = DataLoader(dataset=val_dataset,batch_size=args.batch_size,shuffle=False, drop_last=False)
+    train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
+                                shuffle=True, drop_last=True)
+    val_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size,
+                            shuffle=False, drop_last=False)
     
     # model  4 classes
     model_s = netd.DeepLab(num_classes=NUM_CLASSES, backbone='mobilenet', output_stride=args.out_stride,
@@ -175,11 +240,6 @@ def main():
         model_s = model_s.cuda()
         model_t = model_t.cuda()
     
-    if args.source == 'ct':
-        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
-    elif args.source == 'mr':
-        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
-
     log_str = '==> Loading %s model file: %s' % (model_s.__class__.__name__, args.model_file)
     print(log_str)
     args.out_file.write(log_str + '\n')

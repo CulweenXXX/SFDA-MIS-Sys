@@ -15,13 +15,13 @@ parser.add_argument('--sync-bn', type=bool, default=True)
 parser.add_argument('--freeze-bn', type=bool, default=False)
 parser.add_argument('--epoch', type=int, default=20)
 
-parser.add_argument('--data-dir', default='/data0/grchen/Data/processed_MMWHS')
+parser.add_argument('--data-dir', default='/data0/grchen/Data/mmwhs')
 parser.add_argument('--dataset', type=str, default='mmwhs')
 parser.add_argument('--source', type=str, default='ct', choices=['ct', 'mr'])
 parser.add_argument('--target', type=str, default='mr', choices=['ct', 'mr'])
-parser.add_argument('--batch-size', type=int, default=64)
+parser.add_argument('--batch-size', type=int, default=24)
 
-parser.add_argument('--lr', type=float, default=5e-4)
+parser.add_argument('--lr', type=float, default=5e-6)
 parser.add_argument('--momentum', type=float, default=0.9)
 parser.add_argument('--steps', type=int, default=1, help='gradient steps of tent on each batch')
 parser.add_argument('--episodic', action='store_true', help='reset model/optimizer before each batch')
@@ -30,6 +30,7 @@ parser.add_argument('--interval-valid', type=int, default=1)
 parser.add_argument('--skip-empty-slices', type=str2bool, default=False,
                     help='skip slices without foreground GT during evaluation')
 
+parser.add_argument('--normal', type=bool, default=False)
 args = parser.parse_args()
 
 import os
@@ -66,7 +67,7 @@ torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 
 NUM_CLASSES = 5
-NAMES = ['BG','AA','LA','LV','MYO']
+NAMES = ['BG','MYO','LA','LV','AA']
 
 
 class EvalWrapper(nn.Module):
@@ -107,7 +108,7 @@ class SliceLoaderWrapper:
 def evaluate(model, val_loader):
     return _metrics_evaluate(EvalWrapper(model), SliceLoaderWrapper(val_loader), NUM_CLASSES, NAMES,
                              skip_empty_slices=args.skip_empty_slices,
-                             collect_fn=collect_predictions_mmwhs)
+                             collect_fn=collect_predictions_pnp)
 
 
 # ------------------------- tent core -------------------------
@@ -268,18 +269,32 @@ def main():
     # args.out_file.write(print_args(args) + '\n')
     args.out_file.flush()
 
-    train_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
-                                             phase='train', mode='adapt')
-    val_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
-                                phase='val', mode='adapt')
+    if args.normal == True:
+        train_dataset = mmwhs_dataset_normal(rootdir=args.data_dir, modality=args.target,
+                                                phase='train', mode='adapt')
+        val_dataset = mmwhs_dataset_normal(rootdir=args.data_dir, modality=args.target,
+                                    phase='val', mode='adapt')
+        if args.source == 'ct':
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct_normal/source_model_ct.pth.tar'
+        elif args.source == 'mr':
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr_normal/source_model_mr.pth.tar'
+    else:
+        train_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
+                                                        phase='train', mode='adapt')
+        val_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
+                                    phase='val', mode='adapt')
+        if args.source == 'ct':
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_ct.pth.tar'
+        elif args.source == 'mr':
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mr.pth.tar'
 
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
                               shuffle=True, drop_last=True)
     val_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size,
                             shuffle=False, drop_last=False)
 
-    print(f'训练loader的迭代次数 : {len(train_loader)}')
-    print(f'验证loader的迭代次数 : {len(val_loader)}')
+    # print(f'训练loader的迭代次数 : {len(train_loader)}')
+    # print(f'验证loader的迭代次数 : {len(val_loader)}')
 
     # model  5 classes
     model = netd.DeepLab(num_classes=NUM_CLASSES, backbone='mobilenet', output_stride=args.out_stride,
@@ -287,11 +302,6 @@ def main():
 
     if torch.cuda.is_available():
         model = model.cuda()
-
-    if args.source == 'ct':
-        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
-    elif args.source == 'mr':
-        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
 
     log_str = '==> Loading %s model file: %s' % (model.__class__.__name__, args.model_file)
     print(log_str)
