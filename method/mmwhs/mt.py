@@ -5,7 +5,7 @@ from utils.metrics import evaluate as _metrics_evaluate
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-g', '--gpu', type=str, default='0')
-parser.add_argument('--model-file', type=str, default='logs_train/mms/checkpoint_80.pth.tar')  # source weight path
+parser.add_argument('--model-file', type=str, default='logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar')  # source weight path
 
 parser.add_argument('--model', type=str, default='Deeplab', help='Deeplab')
 parser.add_argument('--out-stride', type=int, default=16)
@@ -170,24 +170,24 @@ def main():
 
     if args.normal == True:
         print("Min-Max Dataset")
-        train_dataset = mmwhs_dataset_normal_2transform(rootdir=args.data_dir, modality=args.target,
+        train_dataset = MMWHSDataset_2transform(rootdir=args.data_dir, modality=args.target,
                                                 phase='train', mode='adapt')
-        val_dataset = mmwhs_dataset_normal(rootdir=args.data_dir, modality=args.target,
+        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
                                     phase='val', mode='adapt')
         if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct_normal/source_model_ct.pth.tar'
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
         elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr_normal/source_model_mr.pth.tar'
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
     else:
         print("Z-score Normalized Dataset")
-        train_dataset = mmwhs_dataset_2transform(rootdir=args.data_dir, modality=args.target,
+        train_dataset = MMWHSDataset_2transform(rootdir=args.data_dir, modality=args.target,
                                                         phase='train', mode='adapt')
-        val_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
+        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
                                     phase='val', mode='adapt')
         if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_ct.pth.tar'
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
         elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mr.pth.tar'
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
 
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
                                 shuffle=True, drop_last=True)

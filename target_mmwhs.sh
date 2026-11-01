@@ -1,25 +1,35 @@
 #!/bin/bash
+# 用法: bash target_mmwhs.sh
+# 当前 mmwhs 目录下的 3 个方法: MT / Tent / CCRC
+# 每次两个方向并行: mr->ct (GPU 2), ct->mr (GPU 3)
 
-PYTHONPATH=. python method/mmwhs/mt.py --source mr --target ct --gpu 2 --note MT_mr2ct_normal_wT75 --normal  --lr 5e-6 --pseudo-label-threshold 0.75 &
-PYTHONPATH=. python method/mmwhs/mt.py --source ct --target mr --gpu 3 --note MT_ct2mr_normal_wT75 --normal  --lr 5e-4 --pseudo-label-threshold 0.75 &
-wait
+cd "$(dirname "$0")"
+export PYTHONPATH=.
 
-PYTHONPATH=. python method/mmwhs/mt.py --source mr --target ct --gpu 2 --note MT_mr2ct_wT75 --lr 5e-6 --pseudo-label-threshold 0.75 &
-PYTHONPATH=. python method/mmwhs/mt.py --source ct --target mr --gpu 3 --note MT_ct2mr_wT75 --lr 5e-4 --pseudo-label-threshold 0.75 &
-wait 
+DATA_DIR=/data0/grchen/Data/mmwhs
+CT_WEIGHT=/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar
+MR_WEIGHT=/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar
 
-PYTHONPATH=. python method/mmwhs/mt.py --source mr --target ct --gpu 2 --note MT_mr2ct_normal_wT90 --normal  --lr 5e-6 --pseudo-label-threshold 0.9 &
-PYTHONPATH=. python method/mmwhs/mt.py --source ct --target mr --gpu 3 --note MT_ct2mr_normal_wT90 --normal  --lr 5e-4 --pseudo-label-threshold 0.9 &
-wait
+run_pair() {
+    # run_pair <method.py> <note前缀> <额外参数...>
+    local script=$1
+    local prefix=$2
+    shift 2
 
-PYTHONPATH=. python method/mmwhs/mt.py --source mr --target ct --gpu 2 --note MT_mr2ct_wT90 --lr 5e-6 --pseudo-label-threshold 0.9 &
-PYTHONPATH=. python method/mmwhs/mt.py --source ct --target mr --gpu 3 --note MT_ct2mr_wT90 --lr 5e-4 --pseudo-label-threshold 0.9 &
-wait 
+    python "method/mmwhs/${script}" --data-dir "${DATA_DIR}" \
+        --source mr --target ct --gpu 2 --model-file "${MR_WEIGHT}" \
+        --note "${prefix}_mr2ct" --lr 5e-6 "$@" &
+    python "method/mmwhs/${script}" --data-dir "${DATA_DIR}" \
+        --source ct --target mr --gpu 3 --model-file "${CT_WEIGHT}" \
+        --note "${prefix}_ct2mr" --lr 5e-4 "$@" &
+    wait
+}
 
-PYTHONPATH=. python method/mmwhs/tent.py --source mr --target ct --gpu 2 --note Tent_mr2ct_normal --normal --lr 5e-6 &
-PYTHONPATH=. python method/mmwhs/tent.py --source ct --target mr --gpu 3 --note Tent_ct2mr_normal --normal --lr 5e-4 &
-wait 
+# MT
+run_pair mt.py MT --pseudo-label-threshold 0.75 --model-ema-rate 0.98
 
-PYTHONPATH=. python method/mmwhs/tent.py --source mr --target ct --gpu 2 --note Tent_mr2ct --lr 5e-6 &
-PYTHONPATH=. python method/mmwhs/tent.py --source ct --target mr --gpu 3 --note Tent_ct2mr --lr 5e-4 &
-wait 
+# Tent
+run_pair tent.py Tent
+
+# CCRC
+run_pair ccrc.py CCRC --pseudo-label-threshold 0.75 --model-ema-rate 0.98

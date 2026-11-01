@@ -14,7 +14,7 @@ run_fold() {
     fold=$1
     gpu=$2
     echo "fold ${fold} -> GPU ${gpu}"
-    python method/procontrast.py \
+    python method/mms/procontrast.py \
         --target "${TARGET}" \
         --gpu "${gpu}" \
         --model-file logs_train/mms/A/source_model_mms.tar \

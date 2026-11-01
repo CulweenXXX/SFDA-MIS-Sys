@@ -270,23 +270,23 @@ def main():
     args.out_file.flush()
 
     if args.normal == True:
-        train_dataset = mmwhs_dataset_normal(rootdir=args.data_dir, modality=args.target,
+        train_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
                                                 phase='train', mode='adapt')
-        val_dataset = mmwhs_dataset_normal(rootdir=args.data_dir, modality=args.target,
+        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
                                     phase='val', mode='adapt')
         if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct_normal/source_model_ct.pth.tar'
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
         elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr_normal/source_model_mr.pth.tar'
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
     else:
-        train_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
+        train_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
                                                         phase='train', mode='adapt')
-        val_dataset = mmwhs_dataset(rootdir=args.data_dir, modality=args.target,
+        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
                                     phase='val', mode='adapt')
         if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_ct.pth.tar'
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
         elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mr.pth.tar'
+            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
 
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
                               shuffle=True, drop_last=True)
