@@ -21,15 +21,15 @@ run_pair() {
         --note "${prefix}_mr2ct" --lr 5e-6 "$@" &
     python "method/mmwhs/${script}" --data-dir "${DATA_DIR}" \
         --source ct --target mr --gpu 3 --model-file "${CT_WEIGHT}" \
-        --note "${prefix}_ct2mr" --lr 5e-4 "$@" &
+        --note "${prefix}_ct2mr" --lr 5e-6 "$@" &
     wait
 }
 
 # MT
-run_pair mt.py MT --pseudo-label-threshold 0.75 --model-ema-rate 0.98
+run_pair mt.py MT --model-ema-rate 0.98
 
 # Tent
-run_pair tent.py Tent
+run_pair tent.py Tent --epoch 5 --interval-valid 1
 
 # CCRC
-run_pair ccrc.py CCRC --pseudo-label-threshold 0.75 --model-ema-rate 0.98
+run_pair ccrc.py CCRC --model-ema-rate 0.98

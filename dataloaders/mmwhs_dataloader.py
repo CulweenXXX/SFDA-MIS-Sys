@@ -54,18 +54,18 @@ def build_adapt_transforms(is_train: bool):
             # A.Affine(translate_percent=(-0.1, 0.1),
             #          scale=(0.9, 1.1),
             #          rotate=(-15, 15), p=0.5),
-            A.ElasticTransform(alpha=1, sigma=50, p=0.2),
+            # A.ElasticTransform(alpha=1, sigma=50, p=0.2),
             # 外观（[0,1] 语义下参数才是正确的）
             A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
             A.GaussNoise(std_range=(0.03, 0.07), p=0.3),
             A.RandomGamma(gamma_limit=(80, 120), p=0.3),
             # 遮挡（0 在 [0,1] 下=背景，语义正确）
-            A.CoarseDropout(
-                num_holes_range=(1, 8),
-                hole_height_range=(8, 24),
-                hole_width_range=(8, 24),
-                fill=0, fill_mask=0, p=0.3,
-            ),
+            # A.CoarseDropout(
+            #     num_holes_range=(1, 8),
+            #     hole_height_range=(8, 24),
+            #     hole_width_range=(8, 24),
+            #     fill=0, fill_mask=0, p=0.3,
+            # ),
         ]
 
     ops.append(A.Resize(TARGET_SIZE, TARGET_SIZE))

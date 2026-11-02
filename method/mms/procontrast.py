@@ -526,7 +526,7 @@ def main():
         args.loss_file.flush()
 
         val_metrics = evaluate(model, val_loader)
-        val_dice = float(val_metrics[6])
+        val_dice = float(val_metrics[7])
         if val_dice > best_pfa_dice:
             best_pfa_dice = val_dice
             best_pfa_epoch = epoch + 1
@@ -613,7 +613,7 @@ def main():
         args.loss_file.flush()
 
         val_metrics = evaluate(model, val_loader)
-        val_dice = float(val_metrics[6])
+        val_dice = float(val_metrics[7])
         if val_dice > best_cl_dice:
             best_cl_dice = val_dice
             best_cl_epoch = epoch + 1

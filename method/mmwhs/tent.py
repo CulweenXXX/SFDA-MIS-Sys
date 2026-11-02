@@ -26,11 +26,10 @@ parser.add_argument('--momentum', type=float, default=0.9)
 parser.add_argument('--steps', type=int, default=1, help='gradient steps of tent on each batch')
 parser.add_argument('--episodic', action='store_true', help='reset model/optimizer before each batch')
 parser.add_argument('--note', type=str, default='descript')
-parser.add_argument('--interval-valid', type=int, default=1)
+parser.add_argument('--interval-valid', type=int, default=5)
 parser.add_argument('--skip-empty-slices', type=str2bool, default=False,
                     help='skip slices without foreground GT during evaluation')
 
-parser.add_argument('--normal', type=bool, default=False)
 args = parser.parse_args()
 
 import os
@@ -269,29 +268,21 @@ def main():
     # args.out_file.write(print_args(args) + '\n')
     args.out_file.flush()
 
-    if args.normal == True:
-        train_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
-                                                phase='train', mode='adapt')
-        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
-                                    phase='val', mode='adapt')
-        if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
-        elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
-    else:
-        train_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
-                                                        phase='train', mode='adapt')
-        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
-                                    phase='val', mode='adapt')
-        if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
-        elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
+    train_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
+                                phase='train', mode='adapt')
+    val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
+                                phase='val', mode='adapt')
+    if args.source == 'ct':
+        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
+    elif args.source == 'mr':
+        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
 
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
-                              shuffle=True, drop_last=True)
+                              shuffle=True, drop_last=True, num_workers=4,
+                              pin_memory=True, persistent_workers=True)
     val_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size,
-                            shuffle=False, drop_last=False)
+                            shuffle=False, drop_last=False, num_workers=4,
+                            pin_memory=True, persistent_workers=True)
 
     # print(f'训练loader的迭代次数 : {len(train_loader)}')
     # print(f'验证loader的迭代次数 : {len(val_loader)}')

@@ -27,8 +27,7 @@ parser.add_argument('--skip_empty_slices', type=bool, default=False)
 parser.add_argument('--model-ema-rate', type=float, default=0.98)
 parser.add_argument('--pseudo-label-threshold', type=float, default=0.75)
 parser.add_argument('--note', type=str, default='descript')
-parser.add_argument('--interval-valid',type=int,default=1)
-parser.add_argument('--normal', action='store_true', help='Enable normal mode')
+parser.add_argument('--interval-valid',type=int,default=5)
 
 args = parser.parse_args()
 
@@ -139,8 +138,8 @@ def adapt_epoch(model_t, model_s, optim, train_loader, args):
         ###softmax
         # predictions_stu_s_softmax: Tensor = F.softmax(predictions_stu_s, dim=1)
         predictions_tes_w_softmax: Tensor = F.softmax(predictions_tea_w, dim=1)
-        pseudo_label = soft_label_to_hard(predictions_tes_w_softmax,args.pseudo_label_threshold)
-
+        # pseudo_label = soft_label_to_hard(predictions_tes_w_softmax,args.pseudo_label_threshold)
+        pseudo_label = torch.argmax(predictions_tes_w_softmax,dim=1)
 
         # only basic pseudo-label loss
         loss = F.cross_entropy(predictions_stu_s, pseudo_label)
@@ -168,31 +167,21 @@ def main():
     # args.out_file.write(print_args(args) + '\n')
     args.out_file.flush()
 
-    if args.normal == True:
-        print("Min-Max Dataset")
-        train_dataset = MMWHSDataset_2transform(rootdir=args.data_dir, modality=args.target,
-                                                phase='train', mode='adapt')
-        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
-                                    phase='val', mode='adapt')
-        if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
-        elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
-    else:
-        print("Z-score Normalized Dataset")
-        train_dataset = MMWHSDataset_2transform(rootdir=args.data_dir, modality=args.target,
-                                                        phase='train', mode='adapt')
-        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
-                                    phase='val', mode='adapt')
-        if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
-        elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
+    train_dataset = MMWHSDataset_2transform(rootdir=args.data_dir, modality=args.target,
+                                            phase='train', mode='adapt')
+    val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
+                                phase='val', mode='adapt')
+    if args.source == 'ct':
+        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
+    elif args.source == 'mr':
+        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
 
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
-                                shuffle=True, drop_last=True)
+                                shuffle=True, drop_last=True, num_workers=4,
+                                pin_memory=True, persistent_workers=True)
     val_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size,
-                            shuffle=False, drop_last=False)
+                            shuffle=False, drop_last=False, num_workers=4,
+                            pin_memory=True, persistent_workers=True)
     
     # model  4 classes
     model_s = netd.DeepLab(num_classes=NUM_CLASSES, backbone='mobilenet', output_stride=args.out_stride,

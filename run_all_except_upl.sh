@@ -4,7 +4,7 @@ set -e
 
 cd "$(dirname "$0")"
 
-for script in run_kfold_tent.sh run_kfold_mt.sh run_kfold_procontrast.sh run_kfold_iplc.sh; do
+for script in run_kfold_procontrast.sh run_kfold_iplc.sh; do
     echo "========== ${script} =========="
     bash "${script}"
 done

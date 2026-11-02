@@ -13,7 +13,7 @@ parser.add_argument('--sync-bn', type=bool, default=True)
 parser.add_argument('--freeze-bn', type=bool, default=False)
 parser.add_argument('--epoch', type=int, default=20)
 parser.add_argument('--lr', type=float, default=5e-4)
-parser.add_argument('--lr-decrease-rate', type=float, default=0.95, help='ratio multiplied to initial lr')
+parser.add_argument('--lr-decrease-rate', type=float, default=0.8, help='ratio multiplied to initial lr')
 parser.add_argument('--lr-decrease-epoch', type=int, default=1, help='interval epoch number for lr decrease')
 
 parser.add_argument('--data-dir', default='/data0/grchen/Data/mmwhs')
@@ -21,15 +21,13 @@ parser.add_argument('--dataset', type=str, default='mmwhs')
 parser.add_argument('--source', type=str, default='ct',choices=['ct','mr'])
 parser.add_argument('--target', type=str, default='mr',choices=['ct','mr'])
 
-parser.add_argument('--batch-size', type=int, default=64)
+parser.add_argument('--batch-size', type=int, default=16)
 parser.add_argument('--skip_empty_slices', type=bool, default=False)
 
 parser.add_argument('--model-ema-rate', type=float, default=0.98)
 parser.add_argument('--pseudo-label-threshold', type=float, default=0.75)
 parser.add_argument('--note', type=str, default='descript')
-parser.add_argument('--interval-valid',type=int,default=1)
-
-parser.add_argument('--normal', action='store_true')
+parser.add_argument('--interval-valid',type=int,default=5)
 args = parser.parse_args()
 
 import os
@@ -206,29 +204,21 @@ def main():
     # args.out_file.write(print_args(args) + '\n')
     args.out_file.flush()
 
-    if args.normal == True:
-        train_dataset = MMWHSDataset_2transform(rootdir=args.data_dir, modality=args.target,
-                                                phase='train', mode='adapt')
-        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
-                                    phase='val', mode='adapt')
-        if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
-        elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
-    else:
-        train_dataset = MMWHSDataset_2transform(rootdir=args.data_dir, modality=args.target,
-                                                        phase='train', mode='adapt')
-        val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
-                                    phase='val', mode='adapt')
-        if args.source == 'ct':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
-        elif args.source == 'mr':
-            args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
+    train_dataset = MMWHSDataset_2transform(rootdir=args.data_dir, modality=args.target,
+                                            phase='train', mode='adapt')
+    val_dataset = MMWHSDataset(rootdir=args.data_dir, modality=args.target,
+                                phase='val', mode='adapt')
+    if args.source == 'ct':
+        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/ct/source_model_mmwhs_ct.pth.tar'
+    elif args.source == 'mr':
+        args.model_file = '/data0/grchen/SFDA_MIS_TestSys/logs_train/mmwhs/mr/source_model_mmwhs_mr.pth.tar'
 
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
-                                shuffle=True, drop_last=True)
+                                shuffle=True, drop_last=True, num_workers=4,
+                                pin_memory=True, persistent_workers=True)
     val_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size,
-                            shuffle=False, drop_last=False)
+                            shuffle=False, drop_last=False, num_workers=4,
+                            pin_memory=True, persistent_workers=True)
     
     # model  4 classes
     model_s = netd.DeepLab(num_classes=NUM_CLASSES, backbone='mobilenet', output_stride=args.out_stride,
