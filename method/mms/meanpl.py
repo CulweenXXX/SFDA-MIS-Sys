@@ -38,7 +38,7 @@ parser.add_argument('--fold-id', type=int, default=None,
 
 parser.add_argument('--cons-lambda',type=float,default=1.0)
 parser.add_argument('--skip-empty-slices', type=str2bool, default=True,
-                    help='drop slices with no foreground GT during evaluation')
+                    help='skip slices without foreground GT during evaluation')
 parser.add_argument('--pl-source', type=str, default='teacher', choices=['teacher', 'mean'],
                     help='pseudo-label source: teacher or mean of teacher+students')
 args = parser.parse_args()
@@ -96,12 +96,8 @@ def update_ema(teacher, student1, student2, alpha, beta):
     for t_p, s1_p, s2_p in zip(teacher.parameters(), student1.parameters(), student2.parameters()):
         t_p.data = alpha * t_p.data + (1 - alpha) * (beta * s1_p.data + (1.0 - beta) * s2_p.data)
 
-def supervised_loss(logits, pseudo_label, skip_empty):
+def supervised_loss(logits, pseudo_label):
     loss_map = F.cross_entropy(logits, pseudo_label, reduction='none')
-    if skip_empty:
-        fg = (pseudo_label != 0).flatten(1).any(dim=1).to(loss_map.dtype)
-        mask = fg[:, None, None].expand_as(loss_map)
-        return (loss_map * mask).sum() / mask.sum().clamp_min(1.0)
     return loss_map.mean()
 
 
@@ -157,12 +153,12 @@ def adapt_epoch(epoch, model_t, model_s1, model_s2, optim, train_loader, args):
         pseudo_label = prob_pl.argmax(dim=1)
 
         loss_ce_s1 = supervised_loss(
-            logits_s1, pseudo_label, args.skip_empty_slices
+            logits_s1, pseudo_label
         )
 
         # Semantic supervision on the weak view
         loss_ce_s2 = supervised_loss(
-            logits_s2_w, pseudo_label, args.skip_empty_slices
+            logits_s2_w, pseudo_label
         )
 
         # Weak-view prediction serves as a detached reference
@@ -309,8 +305,11 @@ def main():
     for param in model_t.parameters():
         param.requires_grad = False
 
-    args.out_file.write(log_str + '\n')
+    res_str = format_result('Source Only', 0, *evaluate(model_t, test_loader))
+    print(res_str)
+    args.out_file.write(res_str + '\n')
     args.out_file.flush()
+
 
     for epoch in range(args.epoch):
         ce_loss, cons_loss, epoch_loss = adapt_epoch(epoch, model_t, model_s1, model_s2, optim, train_loader, args)
@@ -334,31 +333,10 @@ def main():
             args.out_file.write(res_str_t + '\n')
             args.out_file.flush()
 
-            res_str_s = format_result('Student I val', epoch + 1, *evaluate(model_s1, val_loader))
-            print(res_str_s)
-            args.out_file.write(res_str_s + '\n')
-            args.out_file.flush()
-
-            res_str_s = format_result('Student Ⅱ val', epoch + 1, *evaluate(model_s2, val_loader))
-            print(res_str_s)
-            args.out_file.write(res_str_s + '\n')
-            args.out_file.flush()
-
             res_str_t = format_result('Teacher Test', epoch + 1, *evaluate(model_t, test_loader))
             print(res_str_t)
             args.out_file.write(res_str_t + '\n')
             args.out_file.flush()
-
-            res_str_s = format_result('Student I Test', epoch + 1, *evaluate(model_s1, test_loader))
-            print(res_str_s)
-            args.out_file.write(res_str_s + '\n')
-            args.out_file.flush()
-
-            res_str_s = format_result('Student Ⅱ Test', epoch + 1, *evaluate(model_s2, test_loader))
-            print(res_str_s)
-            args.out_file.write(res_str_s + '\n')
-            args.out_file.flush()
-
 
 
 if __name__ == '__main__':

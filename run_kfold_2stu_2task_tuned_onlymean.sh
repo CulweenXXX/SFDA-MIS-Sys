@@ -29,8 +29,7 @@ run_fold() {
         --note "${NOTE}" \
         --epoch "${EPOCH}" \
         --interval-valid "${INTERVAL_VALID}" \
-        --pl-source mean \
-        --skip-empty-slices True
+        --pl-source mean 
 }
 
 
