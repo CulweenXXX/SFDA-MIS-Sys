@@ -158,13 +158,13 @@ def process_part_1(white_indices, points, input_labels):
         input_labels.append(np.array([1, 1, 1]))
 
 
-def random_sample(LV):
-    LV[LV == 1] = 255
-    LV = LV.astype(np.uint8)
-    white_indices_LV = np.where(LV == 255)
+def random_sample(FG):
+    FG[FG == 1] = 255
+    FG = FG.astype(np.uint8)
+    white_indices_FG = np.where(FG == 255)
     points = []
     input_labels = []
-    process_part_1(white_indices_LV, points, input_labels)
+    process_part_1(white_indices_FG, points, input_labels)
     if all(points_part is None for points_part in points):
         return None
     all_points = np.concatenate([points_part for points_part in points if points_part is not None])

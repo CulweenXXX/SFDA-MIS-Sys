@@ -25,11 +25,14 @@ run_fold() {
         --lr 1e-3 \
         --momentum 0.9 \
         --steps 1 \
-        --epoch 20 \
-        --interval-valid 5 \
+        --epoch 1 \
+        --interval-valid 1 \
         --skip-empty-slices False
 }
 
-run_fold 0 0 & run_fold 1 1 & wait
-run_fold 2 0 & run_fold 3 1 & wait
+run_fold 0 0 & 
+run_fold 1 1 & 
+run_fold 2 2 & 
+run_fold 3 3 & 
+wait
 run_fold 4 0
