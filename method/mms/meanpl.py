@@ -37,7 +37,7 @@ parser.add_argument('--fold-id', type=int, default=None,
                     help='当前折号（0 ~ K-1）')
 
 parser.add_argument('--cons-lambda',type=float,default=1.0)
-parser.add_argument('--skip-empty-slices', type=str2bool, default=True,
+parser.add_argument('--skip-empty-slices', type=str2bool, default=False,
                     help='skip slices without foreground GT during evaluation')
 parser.add_argument('--pl-source', type=str, default='teacher', choices=['teacher', 'mean'],
                     help='pseudo-label source: teacher or mean of teacher+students')

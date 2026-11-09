@@ -28,7 +28,7 @@ parser.add_argument('--steps', type=int, default=1, help='gradient steps of tent
 parser.add_argument('--episodic', action='store_true', help='reset model/optimizer before each batch')
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid',type=int,default=1)
-parser.add_argument('--skip-empty-slices', type=str2bool, default=True,
+parser.add_argument('--skip-empty-slices', type=str2bool, default=False,
                     help='skip slices without foreground GT during evaluation')
 
 parser.add_argument('--fold-json', type=str, default=None,

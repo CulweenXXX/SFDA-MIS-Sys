@@ -29,7 +29,7 @@ parser.add_argument('--pseudo-label-threshold', type=float, default=0.75)
 parser.add_argument('--mean-loss-calc-bound-ratio', type=float, default=0.2)
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid',type=int,default=1)
-parser.add_argument('--skip-empty-slices', type=str2bool, default=True,
+parser.add_argument('--skip-empty-slices', type=str2bool, default=False,
                     help='skip slices without foreground GT during evaluation')
 
 parser.add_argument('--fold-json', type=str, default=None,

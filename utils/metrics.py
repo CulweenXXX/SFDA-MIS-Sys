@@ -23,8 +23,8 @@ def format_result(name, epoch, class_names, dice_means, dice_stds, assd_means, a
             mean * scale, mean_std * scale, p=ndigits)
 
     res_str = _format_metric('Dice', dice_means, dice_stds, mean_dice, mean_dice_std, 100.0, 2)
-    res_str += '\n' + _format_metric('ASSD', assd_means, assd_stds, mean_assd, mean_assd_std, 1.0, 2)
-    res_str += '\n' + _format_metric('HD95', hd95_means, hd95_stds, mean_hd95, mean_hd95_std, 1.0, 2)
+    res_str += '\n' + _format_metric('ASSD', assd_means, assd_stds, mean_assd, mean_assd_std, 1.0, 4)
+    res_str += '\n' + _format_metric('HD95', hd95_means, hd95_stds, mean_hd95, mean_hd95_std, 1.0, 4)
     return res_str
 
 
@@ -39,26 +39,26 @@ def _dice_volume(mask_pred, mask_gt):
     return 2.0 * inter / denom
 
 
-def _assd_volume(mask_pred, mask_gt):
-    """体数据 3D ASSD（spacing=(1,1,1)）；任一方为空时返回 NaN。"""
+def _assd_volume(mask_pred, mask_gt, spacing_mm=(1.0, 1.0, 1.0)):
+    """体数据 3D ASSD（使用真实 spacing）；任一方为空时返回 NaN。"""
     mask_pred = np.asarray(mask_pred, dtype=bool)
     mask_gt = np.asarray(mask_gt, dtype=bool)
     if mask_pred.sum() == 0 or mask_gt.sum() == 0:
         return np.nan
-    sd = surfdist.compute_surface_distances(mask_gt, mask_pred, spacing_mm=(1.0, 1.0, 1.0))
+    sd = surfdist.compute_surface_distances(mask_gt, mask_pred, spacing_mm=spacing_mm)
     val = surfdist.compute_average_surface_distance(sd)
     if isinstance(val, (tuple, list)):
         val = 0.5 * (float(val[0]) + float(val[1]))
     return float(val)
 
 
-def _hd95_volume(mask_pred, mask_gt):
-    """体数据 3D HD95（spacing=(1,1,1)）；任一方为空时返回 NaN。"""
+def _hd95_volume(mask_pred, mask_gt, spacing_mm=(1.0, 1.0, 1.0)):
+    """体数据 3D HD95（使用真实 spacing）；任一方为空时返回 NaN。"""
     mask_pred = np.asarray(mask_pred, dtype=bool)
     mask_gt = np.asarray(mask_gt, dtype=bool)
     if mask_pred.sum() == 0 or mask_gt.sum() == 0:
         return np.nan
-    sd = surfdist.compute_surface_distances(mask_gt, mask_pred, spacing_mm=(1.0, 1.0, 1.0))
+    sd = surfdist.compute_surface_distances(mask_gt, mask_pred, spacing_mm=spacing_mm)
     val = surfdist.compute_robust_hausdorff(sd, 95)
     if isinstance(val, (tuple, list)):
         val = 0.5 * (float(val[0]) + float(val[1]))
@@ -75,14 +75,23 @@ def _model_logits(model, image):
 
 
 def collect_predictions_mms(model, val_loader, skip_empty_slices=True):
-    """MMS：dict sample，返回逐 volume 的 logits [C,H,W,D] 与 GT [1,H,W,D]。"""
+    """MMS：dict sample，返回逐 volume 的 logits [C,H,W,D]、GT [1,H,W,D] 与 spacing。"""
     model.eval()
     pred_results_list = []
     gt_segs_list = []
+    spacing_list = []
     with torch.no_grad():
         for sample in val_loader:
             image = sample['image'].cuda()
             label = sample['label'].cuda().long()
+
+            spacing = sample.get('spacing', None)
+            if spacing is not None:
+                spacing = np.asarray(
+                    spacing.detach().cpu() if torch.is_tensor(spacing) else spacing,
+                    dtype=np.float64,
+                ).reshape(-1)[:3]
+                spacing = tuple(float(v) for v in spacing)
 
             if image.dim() == 5:
                 B, C, D, H, W = image.shape
@@ -102,8 +111,17 @@ def collect_predictions_mms(model, val_loader, skip_empty_slices=True):
             pred_results_list.append(torch.stack(preds, dim=-1))
             gt_segs_list.append(torch.stack(targets, dim=-1))
 
+            if skip_empty_slices:
+                # 丢弃空 slice 后 z 轴不再等距，真实 spacing 失效
+                if spacing is not None:
+                    print('[collect_predictions_mms] WARNING: skip_empty_slices=True, '
+                          'spacing is not valid for the collapsed z-axis; fallback to (1,1,1).')
+                spacing_list.append(None)
+            else:
+                spacing_list.append(spacing)
+
     model.train()
-    return pred_results_list, gt_segs_list
+    return pred_results_list, gt_segs_list, spacing_list
 
 def collect_predictions_pnp(model, data_loader,skip_empty_slices=False):
     model.eval()
@@ -162,9 +180,10 @@ def evaluate(model, val_loader, num_classes, names, skip_empty_slices=True,
              collect_fn=collect_predictions_mms):
     """统一评估入口，由 collect_fn 负责各数据集的预测收集。
 
-    collect_fn(model, val_loader, skip_empty_slices) -> (pred_list, gt_list)，
+    collect_fn(model, val_loader, skip_empty_slices) ->
+        (pred_list, gt_list) 或 (pred_list, gt_list, spacing_list)。
     每个元素是一个 volume：pred 为 [C,H,W,D] logits 或 [D,H,W] 索引，
-    gt 为 [1,H,W,D] 或 [D,H,W]。
+    gt 为 [1,H,W,D] 或 [D,H,W]；spacing 为 [H,W,D] 轴序的 (sp_y, sp_x, sp_z)。
     """
     model.eval()
     NUM_CLASSES = num_classes
@@ -173,17 +192,24 @@ def evaluate(model, val_loader, num_classes, names, skip_empty_slices=True,
     val_assd = {name: [] for name in NAMES[1:]}
     val_hd95 = {name: [] for name in NAMES[1:]}
 
-    pred_results_list, gt_segs_list = collect_fn(model, val_loader, skip_empty_slices)
-  
-    for pred, gt in zip(pred_results_list, gt_segs_list):
+    collected = collect_fn(model, val_loader, skip_empty_slices)
+    if len(collected) == 3:
+        pred_results_list, gt_segs_list, spacing_list = collected
+    else:
+        pred_results_list, gt_segs_list = collected
+        spacing_list = [None] * len(pred_results_list)
+
+    for idx, (pred, gt) in enumerate(zip(pred_results_list, gt_segs_list)):
         pred, gt = _to_index_volume(pred, gt)       # [H,W,D] and [H,W,D]
+        spacing = spacing_list[idx] if idx < len(spacing_list) else None
+        spacing_mm = tuple(spacing) if spacing is not None else (1.0, 1.0, 1.0)
         for c in range(1, NUM_CLASSES):
             name = NAMES[c]
             p_mask = pred == c
             g_mask = gt == c
             val_dice[name].append(_dice_volume(p_mask, g_mask))
-            val_assd[name].append(_assd_volume(p_mask, g_mask))
-            val_hd95[name].append(_hd95_volume(p_mask, g_mask))
+            val_assd[name].append(_assd_volume(p_mask, g_mask, spacing_mm))
+            val_hd95[name].append(_hd95_volume(p_mask, g_mask, spacing_mm))
 
     dice_means = np.array([np.nanmean(val_dice[name]) for name in val_dice], dtype=np.float64)
     dice_stds = np.array([np.nanstd(val_dice[name]) for name in val_dice], dtype=np.float64)

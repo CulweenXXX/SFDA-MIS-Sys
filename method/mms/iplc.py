@@ -32,7 +32,7 @@ parser.add_argument('--sample-times', type=int, default=10, help='SAM sampling t
 parser.add_argument('--curve-loss-weight', type=float, default=0.01)
 parser.add_argument('--note', type=str, default='descript')
 parser.add_argument('--interval-valid',type=int,default=1)
-parser.add_argument('--skip-empty-slices', type=str2bool, default=True,
+parser.add_argument('--skip-empty-slices', type=str2bool, default=False,
                     help='skip slices without foreground GT during evaluation')
 
 parser.add_argument('--fold-json', type=str, default=None,

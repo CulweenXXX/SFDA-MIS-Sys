@@ -881,12 +881,21 @@ class niiDataset_2transform_split(Dataset):
 
         lab_obj = sitk.ReadImage(fname["lab"])
         A_gt = sitk.GetArrayFromImage(lab_obj)
+        spacing_x, spacing_y, spacing_z = lab_obj.GetSpacing()
+        size_x, size_y, _ = lab_obj.GetSize()
 
         if self.phase == 'train' and self.dataset == 'mms':
             A, A_gt = crop_depth(A, A_gt)
 
         A = winadj_mri(A)
         A, A_gt = resize(A, A_gt)
+
+        # 标签数组为 [D, H, W]，测度对应 [H, W, D] 轴序 (sp_y, sp_x, sp_z)
+        _, h1, w1 = A_gt.shape
+        spacing = torch.tensor(
+            [spacing_y * size_y / h1, spacing_x * size_x / w1, spacing_z],
+            dtype=torch.float32,
+        )
 
         # ================= 训练：返回两份（弱增强 + 强增强）=================
         if self.phase == 'train':
@@ -924,7 +933,8 @@ class niiDataset_2transform_split(Dataset):
             sample = {
                 'image': A_w.repeat(3, 1, 1, 1),
                 'label': A_gt_w,
-                'img_name': fname["img_name"]
+                'img_name': fname["img_name"],
+                'spacing': spacing,
             }
             return sample
 
